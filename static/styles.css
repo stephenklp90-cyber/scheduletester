@@ -1,0 +1,319 @@
+﻿:root {
+  --bg: #eef1f4;
+  --surface: #ffffff;
+  --line: #5a6476;
+  --header-blue: #223463;
+  --header-blue-accent: #2558cb;
+  --month-band: #dfd2ab;
+  --cell-bg: #f3f3f3;
+  --text: #0d1424;
+  --muted: #4f5b6d;
+  --status-error: #a5301f;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Trebuchet MS", "Segoe UI", Tahoma, sans-serif;
+  color: var(--text);
+  background: linear-gradient(180deg, #dbe1e8 0%, #edf0f3 40%, #f5f7fa 100%);
+}
+
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.8rem 1rem;
+  border-bottom: 1px solid #a8b2bf;
+  background: #fbfcfd;
+}
+
+h1 {
+  margin: 0;
+  font-size: 1.35rem;
+}
+
+.subtitle {
+  margin: 0.1rem 0 0;
+  color: var(--muted);
+}
+
+main {
+  padding: 1rem;
+}
+
+.controls {
+  display: grid;
+  gap: 0.8rem;
+  margin-bottom: 0.7rem;
+}
+
+.location-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.location-tab,
+button {
+  border: 1px solid #6f7c91;
+  border-radius: 6px;
+  padding: 0.42rem 0.65rem;
+  background: #f9fbff;
+  color: #16213a;
+  cursor: pointer;
+  font-size: 0.93rem;
+}
+
+.location-tab.active {
+  background: var(--header-blue);
+  color: #ffffff;
+  border-color: #18284d;
+  font-weight: 700;
+}
+
+.month-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.month-controls h2 {
+  margin: 0;
+  min-width: 200px;
+  text-align: center;
+  font-size: 1.25rem;
+  color: #17243f;
+}
+
+.session-panel {
+  position: relative;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.manager-toggle {
+  min-width: 90px;
+  font-weight: 700;
+}
+
+.manager-popover {
+  position: absolute;
+  top: calc(100% + 0.35rem);
+  right: 0;
+  width: 300px;
+  background: #fbfcff;
+  border: 1px solid #8c9ab0;
+  border-radius: 8px;
+  box-shadow: 0 10px 22px rgba(22, 34, 58, 0.2);
+  padding: 0.65rem;
+  z-index: 20;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.login-form {
+  display: flex;
+  gap: 0.4rem;
+  flex-direction: column;
+}
+
+.login-form input,
+.publish-panel input {
+  border: 1px solid #97a2b2;
+  border-radius: 6px;
+  padding: 0.4rem 0.55rem;
+}
+
+.manager-controls {
+  display: grid;
+  justify-items: start;
+  gap: 0.5rem;
+}
+
+.badge {
+  display: inline-block;
+  border-radius: 999px;
+  background: #dce3ee;
+  color: #2b3c57;
+  padding: 0.12rem 0.55rem;
+  font-size: 0.8rem;
+}
+
+.badge.manager {
+  background: #cfe5ff;
+  color: #203f7a;
+}
+
+.publish-panel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.7rem;
+}
+
+.publish-panel input {
+  min-width: 350px;
+  max-width: 100%;
+}
+
+.save-status {
+  font-size: 0.88rem;
+  color: #37465f;
+}
+
+.save-status.error {
+  color: var(--status-error);
+}
+
+.calendar-wrap {
+  overflow-x: auto;
+  border: 1px solid #3f4c62;
+  background: var(--surface);
+}
+
+.calendar-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  min-width: 1120px;
+}
+
+.calendar-table th,
+.calendar-table td {
+  border: 1px solid #424d61;
+  vertical-align: top;
+}
+
+.calendar-table thead th {
+  background: var(--header-blue);
+  color: #ffffff;
+  text-align: center;
+  font-size: 1.05rem;
+  font-weight: 700;
+  padding: 0.3rem 0.25rem;
+}
+
+.calendar-day {
+  background: var(--cell-bg);
+  min-height: 165px;
+}
+
+.calendar-day.empty {
+  background: #e4e8ee;
+}
+
+.day-content {
+  display: flex;
+  flex-direction: column;
+  min-height: 165px;
+}
+
+.day-top {
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid #aeb8c7;
+  min-height: 28px;
+  background: var(--month-band);
+}
+
+.day-number {
+  min-width: 34px;
+  text-align: center;
+  font-size: 1.9rem;
+  font-weight: 700;
+  line-height: 1;
+  padding: 0.05rem 0;
+}
+
+.month-name {
+  font-size: 1.7rem;
+  font-weight: 700;
+  margin-left: 0.45rem;
+  line-height: 1;
+}
+
+.shift-list {
+  display: grid;
+  gap: 0;
+  padding-top: 0.25rem;
+}
+
+.shift-line {
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid #c7ccd5;
+  min-height: 25px;
+  padding: 0 0.3rem;
+  font-size: 1.02rem;
+}
+
+.shift-label {
+  font-weight: 700;
+  margin-right: 0.25rem;
+  color: #1d2b46;
+  white-space: nowrap;
+}
+
+.shift-value {
+  color: #101a30;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  width: 100%;
+}
+
+.shift-input {
+  width: 100%;
+  border: 0;
+  border-bottom: 1px dotted transparent;
+  background: transparent;
+  padding: 0.05rem;
+  font-size: 1rem;
+  font-family: inherit;
+}
+
+.shift-input:focus {
+  outline: none;
+  border-bottom-color: #3f5a92;
+  background: #ebf1ff;
+}
+
+.shift-input:disabled {
+  color: #27364e;
+}
+
+.learner-type-select {
+  margin-left: 0.35rem;
+  border: 1px solid #8f9bb0;
+  border-radius: 5px;
+  background: #f8fbff;
+  color: #213251;
+  font-size: 0.8rem;
+  padding: 0.1rem 0.2rem;
+}
+
+.hidden {
+  display: none !important;
+}
+
+@media (max-width: 1050px) {
+  .topbar {
+    flex-direction: column;
+  }
+
+  .manager-popover {
+    right: auto;
+    left: 0;
+    width: min(90vw, 320px);
+  }
+
+  .publish-panel input {
+    min-width: 240px;
+    width: 100%;
+  }
+}
