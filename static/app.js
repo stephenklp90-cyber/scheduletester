@@ -116,6 +116,7 @@ function updateSessionUI() {
     els.savePresetButton.classList.add("hidden");
     els.applyPresetButton.classList.add("hidden");
     els.applyNext8Button.classList.add("hidden");
+    els.copyMonthButton.classList.add("hidden");
     els.presetSelect.classList.add("hidden");
     els.publishLinkField.classList.add("hidden");
     return;
@@ -130,6 +131,7 @@ function updateSessionUI() {
   els.savePresetButton.classList.toggle("hidden", !state.manager);
   els.applyPresetButton.classList.toggle("hidden", !state.manager);
   els.applyNext8Button.classList.toggle("hidden", !state.manager);
+  els.copyMonthButton.classList.toggle("hidden", !state.manager);
   els.presetSelect.classList.toggle("hidden", !state.manager);
   els.publishLinkField.classList.toggle("hidden", !state.manager);
 }
