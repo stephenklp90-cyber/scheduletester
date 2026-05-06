@@ -8,6 +8,7 @@
   lastUpdated: null,
   managerPanelOpen: false,
   learnerTypes: {},
+  presets: [],
 };
 
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -37,6 +38,11 @@ const els = {
   getPublishLink: document.getElementById("getPublishLink"),
   rotatePublishLink: document.getElementById("rotatePublishLink"),
   publishLinkField: document.getElementById("publishLinkField"),
+  savePresetButton: document.getElementById("savePresetButton"),
+  applyPresetButton: document.getElementById("applyPresetButton"),
+  applyNext8Button: document.getElementById("applyNext8Button"),
+  copyMonthButton: document.getElementById("copyMonthButton"),
+  presetSelect: document.getElementById("presetSelect"),
 };
 
 function monthYear() {
@@ -107,6 +113,10 @@ function updateSessionUI() {
     els.managerPopover.classList.add("hidden");
     els.getPublishLink.classList.add("hidden");
     els.rotatePublishLink.classList.add("hidden");
+    els.savePresetButton.classList.add("hidden");
+    els.applyPresetButton.classList.add("hidden");
+    els.applyNext8Button.classList.add("hidden");
+    els.presetSelect.classList.add("hidden");
     els.publishLinkField.classList.add("hidden");
     return;
   }
@@ -117,7 +127,39 @@ function updateSessionUI() {
   els.managerControls.classList.toggle("hidden", !state.manager);
   els.getPublishLink.classList.toggle("hidden", !state.manager);
   els.rotatePublishLink.classList.toggle("hidden", !state.manager);
+  els.savePresetButton.classList.toggle("hidden", !state.manager);
+  els.applyPresetButton.classList.toggle("hidden", !state.manager);
+  els.applyNext8Button.classList.toggle("hidden", !state.manager);
+  els.presetSelect.classList.toggle("hidden", !state.manager);
   els.publishLinkField.classList.toggle("hidden", !state.manager);
+}
+
+function renderPresetSelect() {
+  els.presetSelect.innerHTML = "";
+  if (!state.presets.length) {
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = "No presets yet";
+    els.presetSelect.appendChild(opt);
+    return;
+  }
+  state.presets.forEach((preset) => {
+    const opt = document.createElement("option");
+    opt.value = preset.name;
+    opt.textContent = `${preset.name} (${preset.rotation_days} days)`;
+    els.presetSelect.appendChild(opt);
+  });
+}
+
+async function loadPresets() {
+  const params = new URLSearchParams({ location: state.location });
+  const response = await fetch(`/api/presets?${params.toString()}`);
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.error || "Failed to load presets");
+  }
+  state.presets = data.presets || [];
+  renderPresetSelect();
 }
 
 async function saveLearnerType(day, roleType, currentValue) {
@@ -326,6 +368,113 @@ async function loadSchedule() {
   state.learnerTypes = data.learner_types || {};
   renderMonthLabel();
   renderCalendar(data.days);
+  if (state.manager && !state.publicMode) {
+    await loadPresets();
+  }
+}
+
+async function saveCurrentPreset() {
+  const name = window.prompt("Preset name:", "Default 8 Week Rotation");
+  if (!name) {
+    return;
+  }
+  const startDate = window.prompt("Rotation start date (YYYY-MM-DD):", "2026-03-15");
+  if (!startDate) {
+    return;
+  }
+  const endDate = window.prompt("Rotation end date (YYYY-MM-DD):", "2026-05-09");
+  if (!endDate) {
+    return;
+  }
+
+  const response = await fetch("/api/presets/save", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      location: state.location,
+      name: name.trim(),
+      start_date: startDate.trim(),
+      end_date: endDate.trim(),
+    }),
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.error || "Failed to save preset");
+  }
+  setStatus(`Saved preset: ${data.name}`);
+  await loadPresets();
+}
+
+async function applySelectedPreset() {
+  const presetName = els.presetSelect.value;
+  if (!presetName) {
+    throw new Error("Select a preset first");
+  }
+  const targetStart = window.prompt("Apply preset starting on (YYYY-MM-DD):");
+  if (!targetStart) {
+    return;
+  }
+  const weeksRaw = window.prompt("How many weeks to apply?", "8");
+  if (!weeksRaw) {
+    return;
+  }
+
+  const response = await fetch("/api/presets/apply", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      location: state.location,
+      name: presetName,
+      target_start_date: targetStart.trim(),
+      weeks: Number(weeksRaw),
+    }),
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.error || "Failed to apply preset");
+  }
+  setStatus(`Applied ${presetName} for ${data.weeks} weeks`);
+  await loadSchedule();
+}
+
+async function applyNext8Weeks() {
+  const presetName = els.presetSelect.value;
+  if (!presetName) {
+    throw new Error("Select a preset first");
+  }
+
+  const response = await fetch("/api/presets/apply-next", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      location: state.location,
+      name: presetName,
+      weeks: 8,
+    }),
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.error || "Failed to apply next 8 weeks");
+  }
+
+  setStatus(`Applied next 8 weeks from ${data.target_start_date}`);
+  await loadSchedule();
+}
+
+async function copyMonthExport() {
+  const { year, month } = monthYear();
+  const params = new URLSearchParams({
+    location: state.location,
+    year: String(year),
+    month: String(month),
+  });
+  const response = await fetch(`/api/schedule/export?${params.toString()}`);
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.error || "Failed to export month");
+  }
+  await navigator.clipboard.writeText(data.text || "");
+  setStatus("Month copied to clipboard");
 }
 
 async function refreshAuthStatus() {
@@ -465,6 +614,38 @@ function bindEvents() {
       setStatus(err.message, true);
     }
   });
+
+  els.savePresetButton.addEventListener("click", async () => {
+    try {
+      await saveCurrentPreset();
+    } catch (err) {
+      setStatus(err.message, true);
+    }
+  });
+
+  els.applyPresetButton.addEventListener("click", async () => {
+    try {
+      await applySelectedPreset();
+    } catch (err) {
+      setStatus(err.message, true);
+    }
+  });
+
+  els.applyNext8Button.addEventListener("click", async () => {
+    try {
+      await applyNext8Weeks();
+    } catch (err) {
+      setStatus(err.message, true);
+    }
+  });
+
+  els.copyMonthButton.addEventListener("click", async () => {
+    try {
+      await copyMonthExport();
+    } catch (err) {
+      setStatus(err.message, true);
+    }
+  });
 }
 
 async function init() {
@@ -479,5 +660,7 @@ async function init() {
 init().catch((err) => {
   setStatus(err.message, true);
 });
+
+
 
 

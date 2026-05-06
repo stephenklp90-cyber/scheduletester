@@ -1,9 +1,10 @@
 ﻿import argparse
 import calendar
+import json
 import os
 import secrets
 import sqlite3
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from flask import Flask, jsonify, render_template, request, session, url_for
@@ -22,6 +23,8 @@ SHIFT_SLOT_LIMITS = {
     "trainee": 1,
 }
 SHIFTS = list(SHIFT_SLOT_LIMITS.keys())
+DEFAULT_ROTATION_START = date(2026, 3, 15)
+DEFAULT_ROTATION_END = date(2026, 5, 9)
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.environ.get("SCHEDULE_SECRET_KEY", secrets.token_hex(32))
@@ -92,6 +95,58 @@ def base_url() -> str:
     return request.url_root.rstrip("/")
 
 
+def load_entries_for_range(conn: sqlite3.Connection, location: str, start_date: date, end_date: date) -> list[sqlite3.Row]:
+    return conn.execute(
+        """
+        SELECT entry_date, shift, slot, staff_name, role_type
+        FROM schedule_entries
+        WHERE location = ? AND entry_date BETWEEN ? AND ?
+        ORDER BY entry_date, shift, slot
+        """,
+        (location, start_date.isoformat(), end_date.isoformat()),
+    ).fetchall()
+
+
+def apply_preset_pattern(
+    conn: sqlite3.Connection,
+    location: str,
+    pattern: dict,
+    rotation_days: int,
+    target_start: date,
+    weeks: int,
+) -> int:
+    total_days = weeks * 7
+    updated_at = now_iso()
+
+    for day_offset in range(total_days):
+        target_day = target_start + timedelta(days=day_offset)
+        source_key = str(day_offset % rotation_days)
+        source = pattern.get(source_key, {})
+
+        for shift in SHIFTS:
+            slot_limit = SHIFT_SLOT_LIMITS[shift]
+            slot_map = source.get(shift, {})
+            for slot in range(1, slot_limit + 1):
+                staff_name = str(slot_map.get(str(slot), "")).strip()
+                role_type = ""
+                if shift == "trainee":
+                    role_map = source.get("role_type", {})
+                    role_type = "student" if str(role_map.get("1", "trainee")).lower() == "student" else "trainee"
+                conn.execute(
+                    """
+                    INSERT INTO schedule_entries (location, entry_date, shift, slot, staff_name, role_type, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(location, entry_date, shift, slot) DO UPDATE SET
+                        staff_name = excluded.staff_name,
+                        role_type = excluded.role_type,
+                        updated_at = excluded.updated_at
+                    """,
+                    (location, target_day.isoformat(), shift, slot, staff_name, role_type, updated_at),
+                )
+
+    return total_days
+
+
 def init_db() -> None:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
@@ -125,6 +180,19 @@ def init_db() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS schedule_presets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                location TEXT NOT NULL,
+                rotation_days INTEGER NOT NULL,
+                payload_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(name, location)
+            )
+            """
+        )
 
         if get_setting(conn, "manager_username") is None:
             set_setting(conn, "manager_username", "manager")
@@ -146,6 +214,8 @@ def index():
             "locations": LOCATIONS,
             "readOnly": False,
             "publicMode": False,
+            "defaultRotationStart": DEFAULT_ROTATION_START.isoformat(),
+            "defaultRotationEnd": DEFAULT_ROTATION_END.isoformat(),
         },
     )
 
@@ -164,6 +234,8 @@ def public_view(token: str):
             "locations": LOCATIONS,
             "readOnly": True,
             "publicMode": True,
+            "defaultRotationStart": DEFAULT_ROTATION_START.isoformat(),
+            "defaultRotationEnd": DEFAULT_ROTATION_END.isoformat(),
         },
     )
 
@@ -210,28 +282,18 @@ def get_schedule():
 
     days = empty_month_payload(year, month)
     learner_types = empty_learner_type_payload(year, month)
-    start_date = date(year, month, 1).isoformat()
-    end_day = calendar.monthrange(year, month)[1]
-    end_date = date(year, month, end_day).isoformat()
+    start_date = date(year, month, 1)
+    end_date = date(year, month, calendar.monthrange(year, month)[1])
 
     with get_db_connection() as conn:
-        rows = conn.execute(
-            """
-            SELECT entry_date, shift, slot, staff_name, role_type
-            FROM schedule_entries
-            WHERE location = ? AND entry_date BETWEEN ? AND ?
-            ORDER BY entry_date, shift, slot
-            """,
-            (location, start_date, end_date),
-        ).fetchall()
-
+        rows = load_entries_for_range(conn, location, start_date, end_date)
         last_updated_row = conn.execute(
             """
             SELECT MAX(updated_at) AS last_updated
             FROM schedule_entries
             WHERE location = ? AND entry_date BETWEEN ? AND ?
             """,
-            (location, start_date, end_date),
+            (location, start_date.isoformat(), end_date.isoformat()),
         ).fetchone()
 
     for row in rows:
@@ -356,6 +418,223 @@ def update_schedule():
         conn.commit()
 
     return jsonify({"ok": True, "updated_at": updated_at})
+
+
+@app.get("/api/presets")
+def list_presets():
+    location = request.args.get("location", LOCATIONS[0])
+    if location not in LOCATIONS:
+        return jsonify({"error": "Invalid location"}), 400
+
+    with get_db_connection() as conn:
+        rows = conn.execute(
+            "SELECT name, rotation_days, updated_at FROM schedule_presets WHERE location = ? ORDER BY name",
+            (location,),
+        ).fetchall()
+
+    return jsonify(
+        {
+            "presets": [
+                {"name": row["name"], "rotation_days": row["rotation_days"], "updated_at": row["updated_at"]}
+                for row in rows
+            ]
+        }
+    )
+
+
+@app.post("/api/presets/save")
+def save_preset():
+    if not is_manager_logged_in():
+        return jsonify({"error": "Manager login required"}), 401
+
+    data = request.get_json(silent=True) or {}
+    location = data.get("location")
+    name = str(data.get("name", "")).strip()
+    start_raw = data.get("start_date")
+    end_raw = data.get("end_date")
+
+    if location not in LOCATIONS:
+        return jsonify({"error": "Invalid location"}), 400
+    if not name:
+        return jsonify({"error": "Preset name is required"}), 400
+
+    try:
+        start_date = date.fromisoformat(str(start_raw))
+        end_date = date.fromisoformat(str(end_raw))
+    except ValueError:
+        return jsonify({"error": "Invalid start/end date"}), 400
+
+    if end_date < start_date:
+        return jsonify({"error": "End date must be on or after start date"}), 400
+
+    rotation_days = (end_date - start_date).days + 1
+
+    with get_db_connection() as conn:
+        rows = load_entries_for_range(conn, location, start_date, end_date)
+        pattern: dict[str, dict[str, dict[str, str]]] = {}
+        for row in rows:
+            entry_date = date.fromisoformat(row["entry_date"])
+            day_offset = (entry_date - start_date).days
+            shift = row["shift"]
+            slot = str(int(row["slot"]))
+            if day_offset < 0 or day_offset >= rotation_days:
+                continue
+            day_key = str(day_offset)
+            if day_key not in pattern:
+                pattern[day_key] = {}
+            if shift not in pattern[day_key]:
+                pattern[day_key][shift] = {}
+            pattern[day_key][shift][slot] = row["staff_name"]
+            if shift == "trainee":
+                pattern[day_key].setdefault("role_type", {})
+                pattern[day_key]["role_type"]["1"] = (row["role_type"] or "trainee").lower()
+
+        conn.execute(
+            """
+            INSERT INTO schedule_presets (name, location, rotation_days, payload_json, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(name, location) DO UPDATE SET
+                rotation_days = excluded.rotation_days,
+                payload_json = excluded.payload_json,
+                updated_at = excluded.updated_at
+            """,
+            (name, location, rotation_days, json.dumps(pattern), now_iso()),
+        )
+        conn.commit()
+
+    return jsonify({"ok": True, "name": name, "rotation_days": rotation_days})
+
+
+@app.post("/api/presets/apply")
+def apply_preset():
+    if not is_manager_logged_in():
+        return jsonify({"error": "Manager login required"}), 401
+
+    data = request.get_json(silent=True) or {}
+    location = data.get("location")
+    name = str(data.get("name", "")).strip()
+    target_start_raw = data.get("target_start_date")
+    weeks = int(data.get("weeks", 8))
+
+    if location not in LOCATIONS:
+        return jsonify({"error": "Invalid location"}), 400
+    if not name:
+        return jsonify({"error": "Preset name is required"}), 400
+    if weeks < 1 or weeks > 52:
+        return jsonify({"error": "Weeks must be between 1 and 52"}), 400
+
+    try:
+        target_start = date.fromisoformat(str(target_start_raw))
+    except ValueError:
+        return jsonify({"error": "Invalid target start date"}), 400
+
+    with get_db_connection() as conn:
+        preset = conn.execute(
+            "SELECT rotation_days, payload_json FROM schedule_presets WHERE name = ? AND location = ?",
+            (name, location),
+        ).fetchone()
+        if not preset:
+            return jsonify({"error": "Preset not found"}), 404
+
+        rotation_days = int(preset["rotation_days"])
+        pattern = json.loads(preset["payload_json"])
+        total_days = apply_preset_pattern(conn, location, pattern, rotation_days, target_start, weeks)
+        conn.commit()
+
+    return jsonify({"ok": True, "applied_days": total_days, "weeks": weeks})
+
+
+@app.post("/api/presets/apply-next")
+def apply_preset_next():
+    if not is_manager_logged_in():
+        return jsonify({"error": "Manager login required"}), 401
+
+    data = request.get_json(silent=True) or {}
+    location = data.get("location")
+    name = str(data.get("name", "")).strip()
+    weeks = int(data.get("weeks", 8))
+
+    if location not in LOCATIONS:
+        return jsonify({"error": "Invalid location"}), 400
+    if not name:
+        return jsonify({"error": "Preset name is required"}), 400
+    if weeks < 1 or weeks > 52:
+        return jsonify({"error": "Weeks must be between 1 and 52"}), 400
+
+    with get_db_connection() as conn:
+        preset = conn.execute(
+            "SELECT rotation_days, payload_json FROM schedule_presets WHERE name = ? AND location = ?",
+            (name, location),
+        ).fetchone()
+        if not preset:
+            return jsonify({"error": "Preset not found"}), 404
+
+        latest = conn.execute(
+            "SELECT MAX(entry_date) AS max_date FROM schedule_entries WHERE location = ?",
+            (location,),
+        ).fetchone()
+        if latest and latest["max_date"]:
+            target_start = date.fromisoformat(latest["max_date"]) + timedelta(days=1)
+        else:
+            target_start = DEFAULT_ROTATION_START
+
+        rotation_days = int(preset["rotation_days"])
+        pattern = json.loads(preset["payload_json"])
+        total_days = apply_preset_pattern(conn, location, pattern, rotation_days, target_start, weeks)
+        conn.commit()
+
+    return jsonify(
+        {
+            "ok": True,
+            "applied_days": total_days,
+            "weeks": weeks,
+            "target_start_date": target_start.isoformat(),
+        }
+    )
+
+
+@app.get("/api/schedule/export")
+def export_schedule_month():
+    location = request.args.get("location", LOCATIONS[0])
+    if location not in LOCATIONS:
+        return jsonify({"error": "Invalid location"}), 400
+
+    try:
+        year, month = parse_year_month(request.args.get("year"), request.args.get("month"))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    days = empty_month_payload(year, month)
+    learner_types = empty_learner_type_payload(year, month)
+    start_date = date(year, month, 1)
+    end_date = date(year, month, calendar.monthrange(year, month)[1])
+
+    with get_db_connection() as conn:
+        rows = load_entries_for_range(conn, location, start_date, end_date)
+
+    for row in rows:
+        day_key = str(int(row["entry_date"].split("-")[2]))
+        shift = row["shift"]
+        slot = int(row["slot"])
+        if day_key in days and shift in SHIFTS and 1 <= slot <= SHIFT_SLOT_LIMITS[shift]:
+            days[day_key][shift][slot - 1] = row["staff_name"]
+            if shift == "trainee":
+                learner_types[day_key] = "student" if (row["role_type"] or "").lower() == "student" else "trainee"
+
+    lines = ["Date\tLocation\tShift\tSlot\tName"]
+    for day in range(1, end_date.day + 1):
+        iso = date(year, month, day).isoformat()
+        day_data = days[str(day)]
+        for shift in ("day", "night"):
+            for idx, name in enumerate(day_data[shift], start=1):
+                if name.strip():
+                    lines.append(f"{iso}\t{location}\t{shift}\t{idx}\t{name.strip()}")
+        trainee_name = (day_data["trainee"][0] or "").strip()
+        if trainee_name:
+            role_label = learner_types[str(day)]
+            lines.append(f"{iso}\t{location}\t{role_label}\t1\t{trainee_name}")
+
+    return jsonify({"text": "\n".join(lines)})
 
 
 @app.get("/api/publish-link")
