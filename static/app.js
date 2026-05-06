@@ -41,6 +41,7 @@ const els = {
   savePresetButton: document.getElementById("savePresetButton"),
   applyPresetButton: document.getElementById("applyPresetButton"),
   applyNext8Button: document.getElementById("applyNext8Button"),
+  clearMonthButton: document.getElementById("clearMonthButton"),
   copyMonthButton: document.getElementById("copyMonthButton"),
   presetSelect: document.getElementById("presetSelect"),
 };
@@ -116,6 +117,7 @@ function updateSessionUI() {
     els.savePresetButton.classList.add("hidden");
     els.applyPresetButton.classList.add("hidden");
     els.applyNext8Button.classList.add("hidden");
+    els.clearMonthButton.classList.add("hidden");
     els.copyMonthButton.classList.add("hidden");
     els.presetSelect.classList.add("hidden");
     els.publishLinkField.classList.add("hidden");
@@ -131,6 +133,7 @@ function updateSessionUI() {
   els.savePresetButton.classList.toggle("hidden", !state.manager);
   els.applyPresetButton.classList.toggle("hidden", !state.manager);
   els.applyNext8Button.classList.toggle("hidden", !state.manager);
+  els.clearMonthButton.classList.toggle("hidden", !state.manager);
   els.copyMonthButton.classList.toggle("hidden", !state.manager);
   els.presetSelect.classList.toggle("hidden", !state.manager);
   els.publishLinkField.classList.toggle("hidden", !state.manager);
@@ -479,6 +482,32 @@ async function copyMonthExport() {
   setStatus("Month copied to clipboard");
 }
 
+async function clearCurrentMonth() {
+  const { year, month } = monthYear();
+  const monthLabel = state.currentDate.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+  const ok = window.confirm(`Clear all entries for ${state.location} in ${monthLabel}? This cannot be undone.`);
+  if (!ok) {
+    return;
+  }
+
+  const response = await fetch("/api/schedule/clear-month", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      location: state.location,
+      year,
+      month,
+    }),
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.error || "Failed to clear month");
+  }
+
+  setStatus(`Cleared ${data.deleted_rows} entries for ${monthLabel}`);
+  await loadSchedule();
+}
+
 async function refreshAuthStatus() {
   if (state.publicMode) {
     state.manager = false;
@@ -636,6 +665,14 @@ function bindEvents() {
   els.applyNext8Button.addEventListener("click", async () => {
     try {
       await applyNext8Weeks();
+    } catch (err) {
+      setStatus(err.message, true);
+    }
+  });
+
+  els.clearMonthButton.addEventListener("click", async () => {
+    try {
+      await clearCurrentMonth();
     } catch (err) {
       setStatus(err.message, true);
     }

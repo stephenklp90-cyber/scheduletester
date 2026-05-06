@@ -420,6 +420,41 @@ def update_schedule():
     return jsonify({"ok": True, "updated_at": updated_at})
 
 
+@app.post("/api/schedule/clear-month")
+def clear_schedule_month():
+    if not is_manager_logged_in():
+        return jsonify({"error": "Manager login required"}), 401
+
+    data = request.get_json(silent=True) or {}
+    location = data.get("location")
+    year_raw = data.get("year")
+    month_raw = data.get("month")
+
+    if location not in LOCATIONS:
+        return jsonify({"error": "Invalid location"}), 400
+
+    try:
+        year, month = parse_year_month(str(year_raw), str(month_raw))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    start_date = date(year, month, 1).isoformat()
+    end_day = calendar.monthrange(year, month)[1]
+    end_date = date(year, month, end_day).isoformat()
+
+    with get_db_connection() as conn:
+        cursor = conn.execute(
+            """
+            DELETE FROM schedule_entries
+            WHERE location = ? AND entry_date BETWEEN ? AND ?
+            """,
+            (location, start_date, end_date),
+        )
+        conn.commit()
+
+    return jsonify({"ok": True, "deleted_rows": cursor.rowcount})
+
+
 @app.get("/api/presets")
 def list_presets():
     location = request.args.get("location", LOCATIONS[0])
