@@ -107,21 +107,6 @@ button {
   font-weight: 700;
 }
 
-.manager-popover {
-  position: absolute;
-  top: calc(100% + 0.35rem);
-  right: 0;
-  width: 300px;
-  background: #fbfcff;
-  border: 1px solid #8c9ab0;
-  border-radius: 8px;
-  box-shadow: 0 10px 22px rgba(22, 34, 58, 0.2);
-  padding: 0.65rem;
-  z-index: 20;
-  display: grid;
-  gap: 0.5rem;
-}
-
 .login-form {
   display: flex;
   gap: 0.4rem;
@@ -166,6 +151,30 @@ button {
 .publish-panel input {
   min-width: 350px;
   max-width: 100%;
+}
+
+.admin-panel {
+  border: 1px solid #8c9ab0;
+  border-radius: 8px;
+  background: #f9fbff;
+  padding: 0.75rem;
+  margin-bottom: 0.8rem;
+}
+
+.admin-panel h3 {
+  margin: 0 0 0.5rem;
+}
+
+.employee-creds-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.employee-creds-form input {
+  border: 1px solid #97a2b2;
+  border-radius: 6px;
+  padding: 0.4rem 0.55rem;
 }
 
 .save-status {
@@ -308,15 +317,32 @@ button {
   display: none !important;
 }
 
+.login-page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+}
+
+.login-card {
+  width: min(460px, 94vw);
+  background: #fbfcff;
+  border: 1px solid #8c9ab0;
+  border-radius: 10px;
+  padding: 1rem;
+}
+
+.login-card h1 {
+  margin-top: 0;
+}
+
+.login-portal-form {
+  margin-top: 0.7rem;
+}
+
 @media (max-width: 1050px) {
   .topbar {
     flex-direction: column;
-  }
-
-  .manager-popover {
-    right: auto;
-    left: 0;
-    width: min(90vw, 320px);
   }
 
   .publish-panel input {

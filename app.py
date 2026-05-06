@@ -86,7 +86,7 @@ def empty_learner_type_payload(year: int, month: int) -> dict[str, str]:
 
 
 def is_manager_logged_in() -> bool:
-    return bool(session.get("is_manager", False))
+    return session.get("role") == "manager"
 
 
 def base_url() -> str:
@@ -202,20 +202,46 @@ def init_db() -> None:
 
         if get_setting(conn, "public_token") is None:
             set_setting(conn, "public_token", secrets.token_urlsafe(24))
+        if get_setting(conn, "employee_username") is None:
+            set_setting(conn, "employee_username", "YFM")
+        if get_setting(conn, "employee_password_hash") is None:
+            set_setting(conn, "employee_password_hash", generate_password_hash("YouthFirst"))
 
         conn.commit()
 
 
 @app.get("/")
 def index():
+    if session.get("role") in {"manager", "employee"}:
+        return render_template(
+            "schedule.html",
+            app_config={
+                "locations": LOCATIONS,
+                "readOnly": session.get("role") != "manager",
+                "publicMode": False,
+                "defaultRotationStart": DEFAULT_ROTATION_START.isoformat(),
+                "defaultRotationEnd": DEFAULT_ROTATION_END.isoformat(),
+                "role": session.get("role"),
+            },
+        )
+
+    return render_template("login.html")
+
+
+@app.get("/schedule")
+def schedule_view():
+    if session.get("role") not in {"manager", "employee"}:
+        return render_template("login.html")
+
     return render_template(
         "schedule.html",
         app_config={
             "locations": LOCATIONS,
-            "readOnly": False,
+            "readOnly": session.get("role") != "manager",
             "publicMode": False,
             "defaultRotationStart": DEFAULT_ROTATION_START.isoformat(),
             "defaultRotationEnd": DEFAULT_ROTATION_END.isoformat(),
+            "role": session.get("role"),
         },
     )
 
@@ -236,6 +262,7 @@ def public_view(token: str):
             "publicMode": True,
             "defaultRotationStart": DEFAULT_ROTATION_START.isoformat(),
             "defaultRotationEnd": DEFAULT_ROTATION_END.isoformat(),
+            "role": "public",
         },
     )
 
@@ -249,10 +276,16 @@ def login():
     with get_db_connection() as conn:
         manager_username = get_setting(conn, "manager_username", "manager")
         manager_password_hash = get_setting(conn, "manager_password_hash", "")
+        employee_username = get_setting(conn, "employee_username", "YFM")
+        employee_password_hash = get_setting(conn, "employee_password_hash", "")
 
     if username == manager_username and check_password_hash(manager_password_hash, password):
-        session["is_manager"] = True
-        return jsonify({"ok": True})
+        session["role"] = "manager"
+        return jsonify({"ok": True, "role": "manager"})
+
+    if employee_password_hash and username == employee_username and check_password_hash(employee_password_hash, password):
+        session["role"] = "employee"
+        return jsonify({"ok": True, "role": "employee"})
 
     return jsonify({"ok": False, "error": "Invalid credentials"}), 401
 
@@ -265,7 +298,8 @@ def logout():
 
 @app.get("/api/auth-status")
 def auth_status():
-    return jsonify({"is_manager": is_manager_logged_in()})
+    role = session.get("role")
+    return jsonify({"logged_in": bool(role in {"manager", "employee"}), "role": role, "is_manager": role == "manager"})
 
 
 @app.get("/api/schedule")
@@ -453,6 +487,31 @@ def clear_schedule_month():
         conn.commit()
 
     return jsonify({"ok": True, "deleted_rows": cursor.rowcount})
+
+
+@app.post("/api/admin/employee-credentials")
+def update_employee_credentials():
+    if not is_manager_logged_in():
+        return jsonify({"error": "Manager login required"}), 401
+
+    data = request.get_json(silent=True) or {}
+    username = str(data.get("username", "")).strip()
+    password = str(data.get("password", "")).strip()
+
+    if not username:
+        return jsonify({"error": "Employee username is required"}), 400
+    if len(username) > 80:
+        return jsonify({"error": "Employee username too long"}), 400
+    if password and len(password) < 6:
+        return jsonify({"error": "Employee password must be at least 6 characters"}), 400
+
+    with get_db_connection() as conn:
+        set_setting(conn, "employee_username", username)
+        if password:
+            set_setting(conn, "employee_password_hash", generate_password_hash(password))
+        conn.commit()
+
+    return jsonify({"ok": True, "username": username, "password_updated": bool(password)})
 
 
 @app.get("/api/presets")

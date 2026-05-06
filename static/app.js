@@ -2,13 +2,14 @@
   locations: window.APP_CONFIG.locations,
   location: window.APP_CONFIG.locations[0],
   currentDate: new Date(),
-  manager: false,
+  manager: window.APP_CONFIG.role === "manager",
+  role: window.APP_CONFIG.role || "employee",
   forceReadOnly: !!window.APP_CONFIG.readOnly,
   publicMode: !!window.APP_CONFIG.publicMode,
   lastUpdated: null,
-  managerPanelOpen: false,
   learnerTypes: {},
   presets: [],
+  adminPanelOpen: false,
 };
 
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -19,21 +20,20 @@ const SHIFT_CONFIG = [
 ];
 
 const els = {
-  sessionPanel: document.getElementById("sessionPanel"),
   tabs: document.getElementById("locationTabs"),
   monthLabel: document.getElementById("monthLabel"),
   prevMonth: document.getElementById("prevMonth"),
   nextMonth: document.getElementById("nextMonth"),
   weekdayHeader: document.getElementById("weekdayHeader"),
   calendarBody: document.getElementById("calendarBody"),
-  loginForm: document.getElementById("loginForm"),
-  username: document.getElementById("username"),
-  password: document.getElementById("password"),
-  managerToggle: document.getElementById("managerToggle"),
-  managerPopover: document.getElementById("managerPopover"),
-  managerControls: document.getElementById("managerControls"),
   logoutButton: document.getElementById("logoutButton"),
   viewerBadge: document.getElementById("viewerBadge"),
+  managerBadge: document.getElementById("managerBadge"),
+  adminToggleButton: document.getElementById("adminToggleButton"),
+  adminPanel: document.getElementById("adminPanel"),
+  employeeCredsForm: document.getElementById("employeeCredsForm"),
+  employeeUsername: document.getElementById("employeeUsername"),
+  employeePassword: document.getElementById("employeePassword"),
   saveStatus: document.getElementById("saveStatus"),
   getPublishLink: document.getElementById("getPublishLink"),
   rotatePublishLink: document.getElementById("rotatePublishLink"),
@@ -47,10 +47,7 @@ const els = {
 };
 
 function monthYear() {
-  return {
-    year: state.currentDate.getFullYear(),
-    month: state.currentDate.getMonth() + 1,
-  };
+  return { year: state.currentDate.getFullYear(), month: state.currentDate.getMonth() + 1 };
 }
 
 function canEdit() {
@@ -63,14 +60,24 @@ function setStatus(message, isError = false) {
 }
 
 function toIsoDate(year, month, day) {
-  const d = String(day).padStart(2, "0");
-  const m = String(month).padStart(2, "0");
-  return `${year}-${m}-${d}`;
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
-function setManagerPanel(open) {
-  state.managerPanelOpen = !!open;
-  els.managerPopover.classList.toggle("hidden", !state.managerPanelOpen);
+function updateSessionUI() {
+  const managerMode = canEdit();
+  els.managerBadge.classList.toggle("hidden", !managerMode);
+  els.viewerBadge.classList.toggle("hidden", managerMode);
+  els.adminToggleButton.classList.toggle("hidden", !managerMode);
+  els.adminPanel.classList.toggle("hidden", !managerMode || !state.adminPanelOpen);
+  els.getPublishLink.classList.toggle("hidden", !managerMode);
+  els.rotatePublishLink.classList.toggle("hidden", !managerMode);
+  els.savePresetButton.classList.toggle("hidden", !managerMode);
+  els.applyPresetButton.classList.toggle("hidden", !managerMode);
+  els.applyNext8Button.classList.toggle("hidden", !managerMode);
+  els.clearMonthButton.classList.toggle("hidden", !managerMode);
+  els.copyMonthButton.classList.toggle("hidden", !managerMode);
+  els.presetSelect.classList.toggle("hidden", !managerMode);
+  els.publishLinkField.classList.toggle("hidden", !managerMode);
 }
 
 function renderTabs() {
@@ -91,52 +98,15 @@ function renderTabs() {
 
 function renderWeekdayHeader() {
   els.weekdayHeader.innerHTML = "";
-  WEEKDAYS.forEach((name, index) => {
+  WEEKDAYS.forEach((name) => {
     const th = document.createElement("th");
     th.textContent = name;
-    if (index === 0) {
-      th.style.borderTop = "2px solid #2558cb";
-    }
     els.weekdayHeader.appendChild(th);
   });
 }
 
 function renderMonthLabel() {
-  const formatter = new Intl.DateTimeFormat(undefined, { month: "long", year: "numeric" });
-  els.monthLabel.textContent = formatter.format(state.currentDate);
-}
-
-function updateSessionUI() {
-  const managerMode = canEdit();
-
-  if (state.publicMode) {
-    els.managerToggle.classList.add("hidden");
-    els.managerPopover.classList.add("hidden");
-    els.getPublishLink.classList.add("hidden");
-    els.rotatePublishLink.classList.add("hidden");
-    els.savePresetButton.classList.add("hidden");
-    els.applyPresetButton.classList.add("hidden");
-    els.applyNext8Button.classList.add("hidden");
-    els.clearMonthButton.classList.add("hidden");
-    els.copyMonthButton.classList.add("hidden");
-    els.presetSelect.classList.add("hidden");
-    els.publishLinkField.classList.add("hidden");
-    return;
-  }
-
-  els.managerToggle.classList.remove("hidden");
-  els.viewerBadge.classList.toggle("hidden", managerMode);
-  els.loginForm.classList.toggle("hidden", state.manager);
-  els.managerControls.classList.toggle("hidden", !state.manager);
-  els.getPublishLink.classList.toggle("hidden", !state.manager);
-  els.rotatePublishLink.classList.toggle("hidden", !state.manager);
-  els.savePresetButton.classList.toggle("hidden", !state.manager);
-  els.applyPresetButton.classList.toggle("hidden", !state.manager);
-  els.applyNext8Button.classList.toggle("hidden", !state.manager);
-  els.clearMonthButton.classList.toggle("hidden", !state.manager);
-  els.copyMonthButton.classList.toggle("hidden", !state.manager);
-  els.presetSelect.classList.toggle("hidden", !state.manager);
-  els.publishLinkField.classList.toggle("hidden", !state.manager);
+  els.monthLabel.textContent = new Intl.DateTimeFormat(undefined, { month: "long", year: "numeric" }).format(state.currentDate);
 }
 
 function renderPresetSelect() {
@@ -157,34 +127,17 @@ function renderPresetSelect() {
 }
 
 async function loadPresets() {
-  const params = new URLSearchParams({ location: state.location });
-  const response = await fetch(`/api/presets?${params.toString()}`);
+  const response = await fetch(`/api/presets?${new URLSearchParams({ location: state.location }).toString()}`);
   const data = await response.json();
-  if (!response.ok) {
-    throw new Error(data.error || "Failed to load presets");
-  }
+  if (!response.ok) throw new Error(data.error || "Failed to load presets");
   state.presets = data.presets || [];
   renderPresetSelect();
 }
 
-async function saveLearnerType(day, roleType, currentValue) {
-  await saveShiftLine(day, "trainee", 1, currentValue || "", roleType);
-  state.learnerTypes[String(day)] = roleType;
-}
-
 async function saveShiftLine(day, shift, slot, value, roleType = "") {
   const { year, month } = monthYear();
-  const payload = {
-    location: state.location,
-    date: toIsoDate(year, month, day),
-    shift,
-    slot,
-    staff_name: value.trim(),
-  };
-
-  if (shift === "trainee") {
-    payload.role_type = roleType === "student" ? "student" : "trainee";
-  }
+  const payload = { location: state.location, date: toIsoDate(year, month, day), shift, slot, staff_name: value.trim() };
+  if (shift === "trainee") payload.role_type = roleType === "student" ? "student" : "trainee";
 
   setStatus("Saving...");
   const response = await fetch("/api/schedule/update", {
@@ -192,22 +145,15 @@ async function saveShiftLine(day, shift, slot, value, roleType = "") {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-
   const result = await response.json();
-  if (!response.ok) {
-    throw new Error(result.error || "Unable to save");
-  }
-
+  if (!response.ok) throw new Error(result.error || "Unable to save");
   state.lastUpdated = result.updated_at || state.lastUpdated;
-  setStatus(`Saved ${payload.date} ${shift.toUpperCase()} slot ${slot}`);
+  setStatus(`Saved ${payload.date}`);
 }
 
 function buildShiftLine(day, shift, slot, label, value, learnerType = "trainee") {
   const trimmedValue = (value || "").trim();
-
-  if (!canEdit() && !trimmedValue) {
-    return null;
-  }
+  if (!canEdit() && !trimmedValue) return null;
 
   const line = document.createElement("div");
   line.className = "shift-line";
@@ -222,44 +168,37 @@ function buildShiftLine(day, shift, slot, label, value, learnerType = "trainee")
     input.type = "text";
     input.value = value || "";
     input.className = "shift-input";
-
     input.addEventListener("change", async () => {
       try {
-        const activeLearnerType =
-          shift === "trainee" ? (state.learnerTypes[String(day)] || learnerType || "trainee") : "";
+        const activeLearnerType = shift === "trainee" ? (state.learnerTypes[String(day)] || learnerType || "trainee") : "";
         await saveShiftLine(day, shift, slot, input.value, activeLearnerType);
       } catch (err) {
         setStatus(err.message, true);
       }
     });
-
     line.appendChild(input);
+
+    if (shift === "trainee") {
+      const selector = document.createElement("select");
+      selector.className = "learner-type-select";
+      selector.innerHTML = `<option value="trainee">Trainee</option><option value="student">Student</option>`;
+      selector.value = learnerType === "student" ? "student" : "trainee";
+      selector.addEventListener("change", async () => {
+        try {
+          state.learnerTypes[String(day)] = selector.value;
+          await saveShiftLine(day, "trainee", 1, input.value, selector.value);
+          labelEl.textContent = `${selector.value === "student" ? "Student" : "Trainee"} -`;
+        } catch (err) {
+          setStatus(err.message, true);
+        }
+      });
+      line.appendChild(selector);
+    }
   } else {
     const span = document.createElement("span");
     span.className = "shift-value";
     span.textContent = trimmedValue;
     line.appendChild(span);
-  }
-
-  if (canEdit() && shift === "trainee") {
-    const selector = document.createElement("select");
-    selector.className = "learner-type-select";
-    selector.innerHTML = `
-      <option value="trainee">Trainee</option>
-      <option value="student">Student</option>
-    `;
-    selector.value = learnerType === "student" ? "student" : "trainee";
-    selector.addEventListener("change", async () => {
-      try {
-        state.learnerTypes[String(day)] = selector.value;
-        const input = line.querySelector("input.shift-input");
-        await saveLearnerType(day, selector.value, input ? input.value : "");
-        labelEl.textContent = `${selector.value === "student" ? "Student" : "Trainee"} -`;
-      } catch (err) {
-        setStatus(err.message, true);
-      }
-    });
-    line.appendChild(selector);
   }
 
   return line;
@@ -268,13 +207,10 @@ function buildShiftLine(day, shift, slot, label, value, learnerType = "trainee")
 function buildDayCell(day, dayData, showMonthName) {
   const td = document.createElement("td");
   td.className = "calendar-day";
-
   const content = document.createElement("div");
   content.className = "day-content";
-
   const top = document.createElement("div");
   top.className = "day-top";
-
   const number = document.createElement("div");
   number.className = "day-number";
   number.textContent = String(day);
@@ -288,31 +224,16 @@ function buildDayCell(day, dayData, showMonthName) {
   }
 
   content.appendChild(top);
-
   const list = document.createElement("div");
   list.className = "shift-list";
 
-  SHIFT_CONFIG.forEach((shiftCfg) => {
-    for (let i = 0; i < shiftCfg.slots; i += 1) {
-      const shiftValues = dayData[shiftCfg.key] || [];
-      const resolvedLearnerType = state.learnerTypes[String(day)] || "trainee";
-      const resolvedLabel =
-        shiftCfg.key === "trainee"
-          ? resolvedLearnerType === "student"
-            ? "Student"
-            : "Trainee"
-          : shiftCfg.label;
-      const line = buildShiftLine(
-        day,
-        shiftCfg.key,
-        i + 1,
-        resolvedLabel,
-        shiftValues[i] || "",
-        resolvedLearnerType
-      );
-      if (line) {
-        list.appendChild(line);
-      }
+  SHIFT_CONFIG.forEach((cfg) => {
+    for (let i = 0; i < cfg.slots; i += 1) {
+      const vals = dayData[cfg.key] || [];
+      const learnerType = state.learnerTypes[String(day)] || "trainee";
+      const label = cfg.key === "trainee" ? (learnerType === "student" ? "Student" : "Trainee") : cfg.label;
+      const line = buildShiftLine(day, cfg.key, i + 1, label, vals[i] || "", learnerType);
+      if (line) list.appendChild(line);
     }
   });
 
@@ -332,23 +253,19 @@ function renderCalendar(days) {
   const { year, month } = monthYear();
   const daysInMonth = Object.keys(days).length;
   const firstWeekday = new Date(year, month - 1, 1).getDay();
-
   let dayPointer = 1;
   let weekIndex = 0;
 
   while (dayPointer <= daysInMonth) {
     const row = document.createElement("tr");
-
     for (let weekday = 0; weekday < 7; weekday += 1) {
       if ((weekIndex === 0 && weekday < firstWeekday) || dayPointer > daysInMonth) {
         row.appendChild(buildEmptyCell());
       } else {
-        const cell = buildDayCell(dayPointer, days[String(dayPointer)] || {}, dayPointer === 1);
-        row.appendChild(cell);
+        row.appendChild(buildDayCell(dayPointer, days[String(dayPointer)] || {}, dayPointer === 1));
         dayPointer += 1;
       }
     }
-
     els.calendarBody.appendChild(row);
     weekIndex += 1;
   }
@@ -356,249 +273,154 @@ function renderCalendar(days) {
 
 async function loadSchedule() {
   const { year, month } = monthYear();
-  const params = new URLSearchParams({
-    location: state.location,
-    year: String(year),
-    month: String(month),
-  });
-
-  const response = await fetch(`/api/schedule?${params.toString()}`);
+  const response = await fetch(`/api/schedule?${new URLSearchParams({ location: state.location, year: String(year), month: String(month) }).toString()}`);
   const data = await response.json();
-
-  if (!response.ok) {
-    throw new Error(data.error || "Failed to load schedule");
-  }
-
+  if (!response.ok) throw new Error(data.error || "Failed to load schedule");
   state.lastUpdated = data.last_updated;
   state.learnerTypes = data.learner_types || {};
   renderMonthLabel();
   renderCalendar(data.days);
-  if (state.manager && !state.publicMode) {
-    await loadPresets();
+  if (canEdit()) await loadPresets();
+}
+
+async function refreshAuthStatus() {
+  const response = await fetch("/api/auth-status");
+  const data = await response.json();
+  if (!response.ok || !data.logged_in) {
+    window.location.href = "/";
+    return;
   }
+  state.role = data.role;
+  state.manager = data.role === "manager";
+  state.forceReadOnly = !state.manager;
+  updateSessionUI();
+}
+
+async function doLogout() {
+  await fetch("/logout", { method: "POST" });
+  window.location.href = "/";
+}
+
+async function getPublishLink(rotate = false) {
+  const response = await fetch(rotate ? "/api/publish-link/rotate" : "/api/publish-link", { method: rotate ? "POST" : "GET" });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || "Unable to get public link");
+  els.publishLinkField.value = data.link;
+  els.publishLinkField.select();
+  setStatus(rotate ? "Public link rotated" : "Public link ready");
 }
 
 async function saveCurrentPreset() {
   const name = window.prompt("Preset name:", "Default 8 Week Rotation");
-  if (!name) {
-    return;
-  }
+  if (!name) return;
   const startDate = window.prompt("Rotation start date (YYYY-MM-DD):", "2026-03-15");
-  if (!startDate) {
-    return;
-  }
+  if (!startDate) return;
   const endDate = window.prompt("Rotation end date (YYYY-MM-DD):", "2026-05-09");
-  if (!endDate) {
-    return;
-  }
+  if (!endDate) return;
 
   const response = await fetch("/api/presets/save", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      location: state.location,
-      name: name.trim(),
-      start_date: startDate.trim(),
-      end_date: endDate.trim(),
-    }),
+    body: JSON.stringify({ location: state.location, name: name.trim(), start_date: startDate.trim(), end_date: endDate.trim() }),
   });
   const data = await response.json();
-  if (!response.ok) {
-    throw new Error(data.error || "Failed to save preset");
-  }
+  if (!response.ok) throw new Error(data.error || "Failed to save preset");
   setStatus(`Saved preset: ${data.name}`);
   await loadPresets();
 }
 
 async function applySelectedPreset() {
   const presetName = els.presetSelect.value;
-  if (!presetName) {
-    throw new Error("Select a preset first");
-  }
+  if (!presetName) throw new Error("Select a preset first");
   const targetStart = window.prompt("Apply preset starting on (YYYY-MM-DD):");
-  if (!targetStart) {
-    return;
-  }
+  if (!targetStart) return;
   const weeksRaw = window.prompt("How many weeks to apply?", "8");
-  if (!weeksRaw) {
-    return;
-  }
+  if (!weeksRaw) return;
 
   const response = await fetch("/api/presets/apply", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      location: state.location,
-      name: presetName,
-      target_start_date: targetStart.trim(),
-      weeks: Number(weeksRaw),
-    }),
+    body: JSON.stringify({ location: state.location, name: presetName, target_start_date: targetStart.trim(), weeks: Number(weeksRaw) }),
   });
   const data = await response.json();
-  if (!response.ok) {
-    throw new Error(data.error || "Failed to apply preset");
-  }
+  if (!response.ok) throw new Error(data.error || "Failed to apply preset");
   setStatus(`Applied ${presetName} for ${data.weeks} weeks`);
   await loadSchedule();
 }
 
 async function applyNext8Weeks() {
   const presetName = els.presetSelect.value;
-  if (!presetName) {
-    throw new Error("Select a preset first");
-  }
+  if (!presetName) throw new Error("Select a preset first");
 
   const response = await fetch("/api/presets/apply-next", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      location: state.location,
-      name: presetName,
-      weeks: 8,
-    }),
+    body: JSON.stringify({ location: state.location, name: presetName, weeks: 8 }),
   });
   const data = await response.json();
-  if (!response.ok) {
-    throw new Error(data.error || "Failed to apply next 8 weeks");
-  }
-
+  if (!response.ok) throw new Error(data.error || "Failed to apply next 8 weeks");
   setStatus(`Applied next 8 weeks from ${data.target_start_date}`);
   await loadSchedule();
-}
-
-async function copyMonthExport() {
-  const { year, month } = monthYear();
-  const params = new URLSearchParams({
-    location: state.location,
-    year: String(year),
-    month: String(month),
-  });
-  const response = await fetch(`/api/schedule/export?${params.toString()}`);
-  const data = await response.json();
-  if (!response.ok) {
-    throw new Error(data.error || "Failed to export month");
-  }
-  await navigator.clipboard.writeText(data.text || "");
-  setStatus("Month copied to clipboard");
 }
 
 async function clearCurrentMonth() {
   const { year, month } = monthYear();
   const monthLabel = state.currentDate.toLocaleDateString(undefined, { month: "long", year: "numeric" });
-  const ok = window.confirm(`Clear all entries for ${state.location} in ${monthLabel}? This cannot be undone.`);
-  if (!ok) {
-    return;
-  }
+  if (!window.confirm(`Clear all entries for ${state.location} in ${monthLabel}? This cannot be undone.`)) return;
 
   const response = await fetch("/api/schedule/clear-month", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      location: state.location,
-      year,
-      month,
-    }),
+    body: JSON.stringify({ location: state.location, year, month }),
   });
   const data = await response.json();
-  if (!response.ok) {
-    throw new Error(data.error || "Failed to clear month");
-  }
-
+  if (!response.ok) throw new Error(data.error || "Failed to clear month");
   setStatus(`Cleared ${data.deleted_rows} entries for ${monthLabel}`);
   await loadSchedule();
 }
 
-async function refreshAuthStatus() {
-  if (state.publicMode) {
-    state.manager = false;
-    updateSessionUI();
+async function copyMonthExport() {
+  const { year, month } = monthYear();
+  const response = await fetch(`/api/schedule/export?${new URLSearchParams({ location: state.location, year: String(year), month: String(month) }).toString()}`);
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || "Failed to export month");
+  await navigator.clipboard.writeText(data.text || "");
+  setStatus("Month copied to clipboard");
+}
+
+async function updateEmployeeCredentials(evt) {
+  evt.preventDefault();
+  const username = els.employeeUsername.value.trim();
+  const password = els.employeePassword.value;
+  if (!username) {
+    setStatus("Employee username is required", true);
     return;
   }
 
-  const response = await fetch("/api/auth-status");
+  const response = await fetch("/api/admin/employee-credentials", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username, password }),
+  });
   const data = await response.json();
-  state.manager = !!data.is_manager;
-  updateSessionUI();
-}
-
-async function doLogin(evt) {
-  evt.preventDefault();
-  const payload = {
-    username: els.username.value.trim(),
-    password: els.password.value,
-  };
-
-  try {
-    const response = await fetch("/login", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    const data = await response.json();
-    if (!response.ok) {
-      throw new Error(data.error || "Login failed");
-    }
-
-    state.manager = true;
-    els.password.value = "";
-    updateSessionUI();
-    setManagerPanel(false);
-    await loadSchedule();
-    setStatus("Manager login successful");
-  } catch (err) {
-    setStatus(err.message, true);
-  }
-}
-
-async function doLogout() {
-  await fetch("/logout", { method: "POST" });
-  state.manager = false;
-  updateSessionUI();
-  await loadSchedule();
-  setStatus("Logged out");
-}
-
-async function getPublishLink(rotate = false) {
-  const endpoint = rotate ? "/api/publish-link/rotate" : "/api/publish-link";
-  const method = rotate ? "POST" : "GET";
-
-  const response = await fetch(endpoint, { method });
-  const data = await response.json();
-
-  if (!response.ok) {
-    throw new Error(data.error || "Unable to get public link");
-  }
-
-  els.publishLinkField.value = data.link;
-  els.publishLinkField.select();
-  setStatus(rotate ? "Public link rotated" : "Public link ready");
+  if (!response.ok) throw new Error(data.error || "Unable to update employee credentials");
+  els.employeePassword.value = "";
+  setStatus("Employee login updated");
 }
 
 async function pollForUpdates() {
   const { year, month } = monthYear();
-  const params = new URLSearchParams({
-    location: state.location,
-    year: String(year),
-    month: String(month),
-  });
-
-  if (state.lastUpdated) {
-    params.set("since", state.lastUpdated);
-  }
+  const params = new URLSearchParams({ location: state.location, year: String(year), month: String(month) });
+  if (state.lastUpdated) params.set("since", state.lastUpdated);
 
   try {
     const response = await fetch(`/api/updates?${params.toString()}`);
     const data = await response.json();
-    if (!response.ok) {
-      return;
-    }
-
-    if (data.changed) {
+    if (response.ok && data.changed) {
       await loadSchedule();
       setStatus("Schedule refreshed with live updates");
     }
-  } catch (err) {
-    // Quiet background polling.
+  } catch (_err) {
   }
 }
 
@@ -613,77 +435,41 @@ function bindEvents() {
     await loadSchedule();
   });
 
-  els.loginForm.addEventListener("submit", doLogin);
   els.logoutButton.addEventListener("click", doLogout);
-
-  els.managerToggle.addEventListener("click", () => {
-    setManagerPanel(!state.managerPanelOpen);
+  els.adminToggleButton.addEventListener("click", () => {
+    state.adminPanelOpen = !state.adminPanelOpen;
+    updateSessionUI();
   });
-
-  document.addEventListener("click", (event) => {
-    if (!state.managerPanelOpen || state.publicMode) {
-      return;
-    }
-
-    if (!els.sessionPanel?.contains(event.target) && !els.managerPopover.contains(event.target)) {
-      setManagerPanel(false);
-    }
-  });
+  if (els.employeeCredsForm) {
+    els.employeeCredsForm.addEventListener("submit", async (evt) => {
+      try {
+        await updateEmployeeCredentials(evt);
+      } catch (err) {
+        setStatus(err.message, true);
+      }
+    });
+  }
 
   els.getPublishLink.addEventListener("click", async () => {
-    try {
-      await getPublishLink(false);
-    } catch (err) {
-      setStatus(err.message, true);
-    }
+    try { await getPublishLink(false); } catch (err) { setStatus(err.message, true); }
   });
-
   els.rotatePublishLink.addEventListener("click", async () => {
-    try {
-      await getPublishLink(true);
-    } catch (err) {
-      setStatus(err.message, true);
-    }
+    try { await getPublishLink(true); } catch (err) { setStatus(err.message, true); }
   });
-
   els.savePresetButton.addEventListener("click", async () => {
-    try {
-      await saveCurrentPreset();
-    } catch (err) {
-      setStatus(err.message, true);
-    }
+    try { await saveCurrentPreset(); } catch (err) { setStatus(err.message, true); }
   });
-
   els.applyPresetButton.addEventListener("click", async () => {
-    try {
-      await applySelectedPreset();
-    } catch (err) {
-      setStatus(err.message, true);
-    }
+    try { await applySelectedPreset(); } catch (err) { setStatus(err.message, true); }
   });
-
   els.applyNext8Button.addEventListener("click", async () => {
-    try {
-      await applyNext8Weeks();
-    } catch (err) {
-      setStatus(err.message, true);
-    }
+    try { await applyNext8Weeks(); } catch (err) { setStatus(err.message, true); }
   });
-
   els.clearMonthButton.addEventListener("click", async () => {
-    try {
-      await clearCurrentMonth();
-    } catch (err) {
-      setStatus(err.message, true);
-    }
+    try { await clearCurrentMonth(); } catch (err) { setStatus(err.message, true); }
   });
-
   els.copyMonthButton.addEventListener("click", async () => {
-    try {
-      await copyMonthExport();
-    } catch (err) {
-      setStatus(err.message, true);
-    }
+    try { await copyMonthExport(); } catch (err) { setStatus(err.message, true); }
   });
 }
 
@@ -696,10 +482,4 @@ async function init() {
   window.setInterval(pollForUpdates, 8000);
 }
 
-init().catch((err) => {
-  setStatus(err.message, true);
-});
-
-
-
-
+init().catch((err) => setStatus(err.message, true));
