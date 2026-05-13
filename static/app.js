@@ -1,7 +1,15 @@
-﻿const state = {
+﻿function parseIsoDateLocal(iso) {
+  const parts = String(iso || "").split("-");
+  if (parts.length !== 3) return new Date();
+  const year = Number(parts[0]);
+  const month = Number(parts[1]);
+  const day = Number(parts[2]);
+  return new Date(year, month - 1, day);
+}
+const state = {
   locations: window.APP_CONFIG.locations,
   location: window.APP_CONFIG.locations[0],
-  windowStart: new Date(window.APP_CONFIG.defaultWindowStart || "2026-05-10"),
+  windowStart: parseIsoDateLocal(window.APP_CONFIG.defaultWindowStart || "2026-05-10"),
   windowDays: Number(window.APP_CONFIG.windowDays || 56),
   manager: window.APP_CONFIG.role === "manager",
   role: window.APP_CONFIG.role || "employee",
@@ -213,7 +221,7 @@ function buildShiftLine(entryDateIso, shift, slot, label, value, learnerType = "
 }
 
 function buildDayCell(entryDateIso, dayData, showMonthName) {
-  const d = new Date(`${entryDateIso}T00:00:00`);
+  const d = parseIsoDateLocal(entryDateIso);
   const dayNum = d.getDate();
 
   const td = document.createElement("td");
@@ -499,3 +507,4 @@ async function init() {
 }
 
 init().catch((err) => setStatus(err.message, true));
+
