@@ -394,11 +394,11 @@ async function clearCurrentWindow() {
   const response = await fetch("/api/schedule/clear-month", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ location: state.location, year: state.windowStart.getFullYear(), month: state.windowStart.getMonth() + 1 }),
+    body: JSON.stringify({ location: state.location, start_date: start, window_days: state.windowDays }),
   });
   const data = await response.json();
   if (!response.ok) throw new Error(data.error || "Failed to clear window month");
-  setStatus(`Cleared ${data.deleted_rows} entries in current month`);
+  setStatus(`Cleared ${data.deleted_rows} entries in current 8-week window`);
   await loadSchedule();
 }
 

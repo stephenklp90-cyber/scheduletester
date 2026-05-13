@@ -576,20 +576,28 @@ def clear_schedule_month():
 
     data = request.get_json(silent=True) or {}
     location = data.get("location")
-    year_raw = data.get("year")
-    month_raw = data.get("month")
+    start_raw = data.get("start_date")
+    window_days_raw = data.get("window_days", WINDOW_DAYS)
 
     if location not in LOCATIONS:
         return jsonify({"error": "Invalid location"}), 400
 
     try:
-        year, month = parse_year_month(str(year_raw), str(month_raw))
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
+        start_date_obj = date.fromisoformat(str(start_raw))
+    except ValueError:
+        return jsonify({"error": "Invalid start_date"}), 400
 
-    start_date = date(year, month, 1).isoformat()
-    end_day = calendar.monthrange(year, month)[1]
-    end_date = date(year, month, end_day).isoformat()
+    try:
+        window_days = int(window_days_raw)
+    except (TypeError, ValueError):
+        return jsonify({"error": "Invalid window_days"}), 400
+
+    if window_days < 1 or window_days > 366:
+        return jsonify({"error": "window_days out of range"}), 400
+
+    end_date_obj = start_date_obj + timedelta(days=window_days - 1)
+    start_date = start_date_obj.isoformat()
+    end_date = end_date_obj.isoformat()
 
     with get_db_connection() as conn:
         rows = conn.execute(
