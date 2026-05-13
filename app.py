@@ -151,7 +151,7 @@ def log_change(
             operation_id, location, entry_date, shift, slot,
             prev_staff_name, prev_role_type, prev_highlight_color, new_staff_name, new_role_type, new_highlight_color
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             operation_id,
