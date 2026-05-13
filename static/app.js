@@ -328,9 +328,13 @@ async function getPublishLink(rotate = false) {
 async function saveCurrentPreset() {
   const name = window.prompt("Preset name:", "Default 8 Week Rotation");
   if (!name) return;
-  const startDate = window.prompt("Rotation start date (YYYY-MM-DD):", "2026-03-15");
+  const startDate = window.prompt("Rotation start date (YYYY-MM-DD):", currentWindowStartIso());
   if (!startDate) return;
-  const endDate = window.prompt("Rotation end date (YYYY-MM-DD):", "2026-05-09");
+  const startObj = parseIsoDateLocal(startDate.trim());
+  const endObj = new Date(startObj);
+  endObj.setDate(endObj.getDate() + state.windowDays - 1);
+  const endDateDefault = toIsoDateValue(endObj);
+  const endDate = window.prompt("Rotation end date (YYYY-MM-DD):", endDateDefault);
   if (!endDate) return;
 
   const response = await fetch("/api/presets/save", {
@@ -349,13 +353,11 @@ async function applySelectedPreset() {
   if (!presetName) throw new Error("Select a preset first");
   const targetStart = window.prompt("Apply preset starting on (YYYY-MM-DD):");
   if (!targetStart) return;
-  const weeksRaw = window.prompt("How many weeks to apply?", "8");
-  if (!weeksRaw) return;
 
   const response = await fetch("/api/presets/apply", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ location: state.location, name: presetName, target_start_date: targetStart.trim(), weeks: Number(weeksRaw) }),
+    body: JSON.stringify({ location: state.location, name: presetName, target_start_date: targetStart.trim(), weeks: 8 }),
   });
   const data = await response.json();
   if (!response.ok) throw new Error(data.error || "Failed to apply preset");

@@ -707,6 +707,8 @@ def save_preset():
         return jsonify({"error": "End date must be on or after start date"}), 400
 
     rotation_days = (end_date - start_date).days + 1
+    if rotation_days != WINDOW_DAYS:
+        return jsonify({"error": f"Preset range must be exactly {WINDOW_DAYS} days (8 weeks)"}), 400
 
     with get_db_connection() as conn:
         rows = load_entries_for_range(conn, location, start_date, end_date)
@@ -753,14 +755,17 @@ def apply_preset():
     location = data.get("location")
     name = str(data.get("name", "")).strip()
     target_start_raw = data.get("target_start_date")
-    weeks = int(data.get("weeks", 8))
+    try:
+        weeks = int(data.get("weeks", 8))
+    except (TypeError, ValueError):
+        return jsonify({"error": "Invalid weeks value"}), 400
 
     if location not in LOCATIONS:
         return jsonify({"error": "Invalid location"}), 400
     if not name:
         return jsonify({"error": "Preset name is required"}), 400
-    if weeks < 1 or weeks > 52:
-        return jsonify({"error": "Weeks must be between 1 and 52"}), 400
+    if weeks != 8:
+        return jsonify({"error": "Apply preset currently supports exactly 8 weeks"}), 400
 
     try:
         target_start = date.fromisoformat(str(target_start_raw))
@@ -792,14 +797,17 @@ def apply_preset_next():
     data = request.get_json(silent=True) or {}
     location = data.get("location")
     name = str(data.get("name", "")).strip()
-    weeks = int(data.get("weeks", 8))
+    try:
+        weeks = int(data.get("weeks", 8))
+    except (TypeError, ValueError):
+        return jsonify({"error": "Invalid weeks value"}), 400
 
     if location not in LOCATIONS:
         return jsonify({"error": "Invalid location"}), 400
     if not name:
         return jsonify({"error": "Preset name is required"}), 400
-    if weeks < 1 or weeks > 52:
-        return jsonify({"error": "Weeks must be between 1 and 52"}), 400
+    if weeks != 8:
+        return jsonify({"error": "Apply next currently supports exactly 8 weeks"}), 400
 
     with get_db_connection() as conn:
         preset = conn.execute(
