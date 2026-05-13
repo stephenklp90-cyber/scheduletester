@@ -23,6 +23,7 @@ SHIFT_SLOT_LIMITS = {
     "trainee": 1,
 }
 SHIFTS = list(SHIFT_SLOT_LIMITS.keys())
+HIGHLIGHT_OPTIONS = {"", "green", "purple"}
 DEFAULT_ROTATION_START = date(2026, 3, 15)
 DEFAULT_ROTATION_END = date(2026, 5, 9)
 WINDOW_DAYS = 56
@@ -100,7 +101,7 @@ def base_url() -> str:
 def load_entries_for_range(conn: sqlite3.Connection, location: str, start_date: date, end_date: date) -> list[sqlite3.Row]:
     return conn.execute(
         """
-        SELECT entry_date, shift, slot, staff_name, role_type
+        SELECT entry_date, shift, slot, staff_name, role_type, highlight_color
         FROM schedule_entries
         WHERE location = ? AND entry_date BETWEEN ? AND ?
         ORDER BY entry_date, shift, slot
@@ -114,7 +115,7 @@ def get_existing_entry(
 ) -> sqlite3.Row | None:
     return conn.execute(
         """
-        SELECT staff_name, role_type
+        SELECT staff_name, role_type, highlight_color
         FROM schedule_entries
         WHERE location = ? AND entry_date = ? AND shift = ? AND slot = ?
         """,
@@ -139,18 +140,32 @@ def log_change(
     slot: int,
     prev_staff: str | None,
     prev_role: str | None,
+    prev_highlight: str | None,
     new_staff: str | None,
     new_role: str | None,
+    new_highlight: str | None,
 ) -> None:
     conn.execute(
         """
         INSERT INTO change_entries (
             operation_id, location, entry_date, shift, slot,
-            prev_staff_name, prev_role_type, new_staff_name, new_role_type
+            prev_staff_name, prev_role_type, prev_highlight_color, new_staff_name, new_role_type, new_highlight_color
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (operation_id, location, entry_date, shift, slot, prev_staff, prev_role, new_staff, new_role),
+        (
+            operation_id,
+            location,
+            entry_date,
+            shift,
+            slot,
+            prev_staff,
+            prev_role,
+            prev_highlight,
+            new_staff,
+            new_role,
+            new_highlight,
+        ),
     )
 
 
@@ -163,27 +178,43 @@ def apply_entry_with_log(
     slot: int,
     new_staff: str,
     new_role: str,
+    new_highlight: str,
     updated_at: str,
 ) -> None:
     prev = get_existing_entry(conn, location, entry_date, shift, slot)
     prev_staff = prev["staff_name"] if prev else None
     prev_role = prev["role_type"] if prev else None
+    prev_highlight = prev["highlight_color"] if prev else None
 
-    if prev_staff == new_staff and (prev_role or "") == (new_role or ""):
+    if prev_staff == new_staff and (prev_role or "") == (new_role or "") and (prev_highlight or "") == (new_highlight or ""):
         return
 
-    log_change(conn, operation_id, location, entry_date, shift, slot, prev_staff, prev_role, new_staff, new_role)
+    log_change(
+        conn,
+        operation_id,
+        location,
+        entry_date,
+        shift,
+        slot,
+        prev_staff,
+        prev_role,
+        prev_highlight,
+        new_staff,
+        new_role,
+        new_highlight,
+    )
     conn.execute(
         """
-        INSERT INTO schedule_entries (location, entry_date, shift, slot, staff_name, role_type, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO schedule_entries (location, entry_date, shift, slot, staff_name, role_type, highlight_color, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(location, entry_date, shift, slot)
         DO UPDATE SET
             staff_name = excluded.staff_name,
             role_type = excluded.role_type,
+            highlight_color = excluded.highlight_color,
             updated_at = excluded.updated_at
         """,
-        (location, entry_date, shift, slot, new_staff, new_role, updated_at),
+        (location, entry_date, shift, slot, new_staff, new_role, new_highlight, updated_at),
     )
 
 
@@ -210,6 +241,9 @@ def apply_preset_pattern(
             for slot in range(1, slot_limit + 1):
                 staff_name = str(slot_map.get(str(slot), "")).strip()
                 role_type = ""
+                highlight_color = str(slot_map.get(f"highlight_{slot}", "")).strip().lower()
+                if highlight_color not in HIGHLIGHT_OPTIONS:
+                    highlight_color = ""
                 if shift == "trainee":
                     role_map = source.get("role_type", {})
                     role_type = "student" if str(role_map.get("1", "trainee")).lower() == "student" else "trainee"
@@ -222,6 +256,7 @@ def apply_preset_pattern(
                     slot,
                     staff_name,
                     role_type,
+                    highlight_color,
                     updated_at,
                 )
 
@@ -242,6 +277,7 @@ def init_db() -> None:
                 slot INTEGER NOT NULL,
                 staff_name TEXT NOT NULL,
                 role_type TEXT NOT NULL DEFAULT '',
+                highlight_color TEXT NOT NULL DEFAULT '',
                 updated_at TEXT NOT NULL,
                 UNIQUE(location, entry_date, shift, slot)
             )
@@ -252,6 +288,8 @@ def init_db() -> None:
         existing_column_names = {column["name"] for column in columns}
         if "role_type" not in existing_column_names:
             conn.execute("ALTER TABLE schedule_entries ADD COLUMN role_type TEXT NOT NULL DEFAULT ''")
+        if "highlight_color" not in existing_column_names:
+            conn.execute("ALTER TABLE schedule_entries ADD COLUMN highlight_color TEXT NOT NULL DEFAULT ''")
 
         conn.execute(
             """
@@ -294,12 +332,20 @@ def init_db() -> None:
                 slot INTEGER NOT NULL,
                 prev_staff_name TEXT,
                 prev_role_type TEXT,
+                prev_highlight_color TEXT,
                 new_staff_name TEXT,
                 new_role_type TEXT,
+                new_highlight_color TEXT,
                 FOREIGN KEY(operation_id) REFERENCES change_operations(id)
             )
             """
         )
+        change_columns = conn.execute("PRAGMA table_info(change_entries)").fetchall()
+        change_column_names = {column["name"] for column in change_columns}
+        if "prev_highlight_color" not in change_column_names:
+            conn.execute("ALTER TABLE change_entries ADD COLUMN prev_highlight_color TEXT")
+        if "new_highlight_color" not in change_column_names:
+            conn.execute("ALTER TABLE change_entries ADD COLUMN new_highlight_color TEXT")
 
         if get_setting(conn, "manager_username") is None:
             set_setting(conn, "manager_username", "manager")
@@ -431,10 +477,15 @@ def get_schedule():
     end_date = start_date + timedelta(days=WINDOW_DAYS - 1)
     days: dict[str, dict[str, list[str]]] = {}
     learner_types: dict[str, str] = {}
+    highlights: dict[str, dict[str, list[str]]] = {}
     for offset in range(WINDOW_DAYS):
         cur = start_date + timedelta(days=offset)
         key = cur.isoformat()
         days[key] = {
+            shift: ["" for _ in range(slot_limit)]
+            for shift, slot_limit in SHIFT_SLOT_LIMITS.items()
+        }
+        highlights[key] = {
             shift: ["" for _ in range(slot_limit)]
             for shift, slot_limit in SHIFT_SLOT_LIMITS.items()
         }
@@ -457,6 +508,7 @@ def get_schedule():
         slot = int(row["slot"])
         if day_key in days and shift in SHIFTS and 1 <= slot <= SHIFT_SLOT_LIMITS[shift]:
             days[day_key][shift][slot - 1] = row["staff_name"]
+            highlights[day_key][shift][slot - 1] = (row["highlight_color"] or "").strip().lower()
             if shift == "trainee":
                 role_type = (row["role_type"] or "").strip().lower()
                 learner_types[day_key] = "student" if role_type == "student" else "trainee"
@@ -468,6 +520,7 @@ def get_schedule():
             "end_date": end_date.isoformat(),
             "window_days": WINDOW_DAYS,
             "days": days,
+            "highlights": highlights,
             "learner_types": learner_types,
             "last_updated": (last_updated_row["last_updated"] if last_updated_row else None),
         }
@@ -521,6 +574,7 @@ def update_schedule():
     slot = data.get("slot")
     staff_name = str(data.get("staff_name", "")).strip()
     role_type = str(data.get("role_type", "")).strip().lower()
+    highlight_color = str(data.get("highlight_color", "")).strip().lower()
 
     if location not in LOCATIONS:
         return jsonify({"error": "Invalid location"}), 400
@@ -544,6 +598,8 @@ def update_schedule():
 
     if len(staff_name) > 80:
         return jsonify({"error": "Staff name too long"}), 400
+    if highlight_color not in HIGHLIGHT_OPTIONS:
+        return jsonify({"error": "Invalid highlight color"}), 400
 
     normalized_role_type = ""
     if shift == "trainee":
@@ -562,6 +618,7 @@ def update_schedule():
             slot_number,
             staff_name,
             normalized_role_type,
+            highlight_color,
             updated_at,
         )
         conn.commit()
@@ -602,7 +659,7 @@ def clear_schedule_month():
     with get_db_connection() as conn:
         rows = conn.execute(
             """
-            SELECT entry_date, shift, slot, staff_name, role_type
+            SELECT entry_date, shift, slot, staff_name, role_type, highlight_color
             FROM schedule_entries
             WHERE location = ? AND entry_date BETWEEN ? AND ?
             """,
@@ -619,6 +676,8 @@ def clear_schedule_month():
                 int(row["slot"]),
                 row["staff_name"],
                 row["role_type"],
+                row["highlight_color"],
+                None,
                 None,
                 None,
             )
@@ -726,6 +785,7 @@ def save_preset():
             if shift not in pattern[day_key]:
                 pattern[day_key][shift] = {}
             pattern[day_key][shift][slot] = row["staff_name"]
+            pattern[day_key][shift][f"highlight_{slot}"] = (row["highlight_color"] or "").strip().lower()
             if shift == "trainee":
                 pattern[day_key].setdefault("role_type", {})
                 pattern[day_key]["role_type"]["1"] = (row["role_type"] or "trainee").lower()
@@ -855,7 +915,7 @@ def undo_last_change():
         op_id = int(op["id"])
         changes = conn.execute(
             """
-            SELECT location, entry_date, shift, slot, prev_staff_name, prev_role_type
+            SELECT location, entry_date, shift, slot, prev_staff_name, prev_role_type, prev_highlight_color
             FROM change_entries
             WHERE operation_id = ?
             ORDER BY id DESC
@@ -871,6 +931,7 @@ def undo_last_change():
             slot = int(row["slot"])
             prev_staff = row["prev_staff_name"]
             prev_role = row["prev_role_type"] or ""
+            prev_highlight = row["prev_highlight_color"] or ""
 
             if prev_staff is None:
                 conn.execute(
@@ -883,14 +944,15 @@ def undo_last_change():
             else:
                 conn.execute(
                     """
-                    INSERT INTO schedule_entries (location, entry_date, shift, slot, staff_name, role_type, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO schedule_entries (location, entry_date, shift, slot, staff_name, role_type, highlight_color, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(location, entry_date, shift, slot) DO UPDATE SET
                         staff_name = excluded.staff_name,
                         role_type = excluded.role_type,
+                        highlight_color = excluded.highlight_color,
                         updated_at = excluded.updated_at
                     """,
-                    (location, entry_date, shift, slot, prev_staff, prev_role, updated_at),
+                    (location, entry_date, shift, slot, prev_staff, prev_role, prev_highlight, updated_at),
                 )
 
         conn.execute("DELETE FROM change_entries WHERE operation_id = ?", (op_id,))
