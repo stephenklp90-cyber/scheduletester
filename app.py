@@ -25,6 +25,8 @@ SHIFT_SLOT_LIMITS = {
 SHIFTS = list(SHIFT_SLOT_LIMITS.keys())
 DEFAULT_ROTATION_START = date(2026, 3, 15)
 DEFAULT_ROTATION_END = date(2026, 5, 9)
+WINDOW_DAYS = 56
+DEFAULT_VIEW_START = date(2026, 5, 10)
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.environ.get("SCHEDULE_SECRET_KEY", secrets.token_hex(32))
@@ -107,8 +109,87 @@ def load_entries_for_range(conn: sqlite3.Connection, location: str, start_date: 
     ).fetchall()
 
 
+def get_existing_entry(
+    conn: sqlite3.Connection, location: str, entry_date: str, shift: str, slot: int
+) -> sqlite3.Row | None:
+    return conn.execute(
+        """
+        SELECT staff_name, role_type
+        FROM schedule_entries
+        WHERE location = ? AND entry_date = ? AND shift = ? AND slot = ?
+        """,
+        (location, entry_date, shift, slot),
+    ).fetchone()
+
+
+def create_operation(conn: sqlite3.Connection, actor_role: str) -> int:
+    cursor = conn.execute(
+        "INSERT INTO change_operations (actor_role, created_at) VALUES (?, ?)",
+        (actor_role, now_iso()),
+    )
+    return int(cursor.lastrowid)
+
+
+def log_change(
+    conn: sqlite3.Connection,
+    operation_id: int,
+    location: str,
+    entry_date: str,
+    shift: str,
+    slot: int,
+    prev_staff: str | None,
+    prev_role: str | None,
+    new_staff: str | None,
+    new_role: str | None,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO change_entries (
+            operation_id, location, entry_date, shift, slot,
+            prev_staff_name, prev_role_type, new_staff_name, new_role_type
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (operation_id, location, entry_date, shift, slot, prev_staff, prev_role, new_staff, new_role),
+    )
+
+
+def apply_entry_with_log(
+    conn: sqlite3.Connection,
+    operation_id: int,
+    location: str,
+    entry_date: str,
+    shift: str,
+    slot: int,
+    new_staff: str,
+    new_role: str,
+    updated_at: str,
+) -> None:
+    prev = get_existing_entry(conn, location, entry_date, shift, slot)
+    prev_staff = prev["staff_name"] if prev else None
+    prev_role = prev["role_type"] if prev else None
+
+    if prev_staff == new_staff and (prev_role or "") == (new_role or ""):
+        return
+
+    log_change(conn, operation_id, location, entry_date, shift, slot, prev_staff, prev_role, new_staff, new_role)
+    conn.execute(
+        """
+        INSERT INTO schedule_entries (location, entry_date, shift, slot, staff_name, role_type, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(location, entry_date, shift, slot)
+        DO UPDATE SET
+            staff_name = excluded.staff_name,
+            role_type = excluded.role_type,
+            updated_at = excluded.updated_at
+        """,
+        (location, entry_date, shift, slot, new_staff, new_role, updated_at),
+    )
+
+
 def apply_preset_pattern(
     conn: sqlite3.Connection,
+    operation_id: int,
     location: str,
     pattern: dict,
     rotation_days: int,
@@ -132,16 +213,16 @@ def apply_preset_pattern(
                 if shift == "trainee":
                     role_map = source.get("role_type", {})
                     role_type = "student" if str(role_map.get("1", "trainee")).lower() == "student" else "trainee"
-                conn.execute(
-                    """
-                    INSERT INTO schedule_entries (location, entry_date, shift, slot, staff_name, role_type, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(location, entry_date, shift, slot) DO UPDATE SET
-                        staff_name = excluded.staff_name,
-                        role_type = excluded.role_type,
-                        updated_at = excluded.updated_at
-                    """,
-                    (location, target_day.isoformat(), shift, slot, staff_name, role_type, updated_at),
+                apply_entry_with_log(
+                    conn,
+                    operation_id,
+                    location,
+                    target_day.isoformat(),
+                    shift,
+                    slot,
+                    staff_name,
+                    role_type,
+                    updated_at,
                 )
 
     return total_days
@@ -193,6 +274,32 @@ def init_db() -> None:
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS change_operations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                actor_role TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS change_entries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                operation_id INTEGER NOT NULL,
+                location TEXT NOT NULL,
+                entry_date TEXT NOT NULL,
+                shift TEXT NOT NULL,
+                slot INTEGER NOT NULL,
+                prev_staff_name TEXT,
+                prev_role_type TEXT,
+                new_staff_name TEXT,
+                new_role_type TEXT,
+                FOREIGN KEY(operation_id) REFERENCES change_operations(id)
+            )
+            """
+        )
 
         if get_setting(conn, "manager_username") is None:
             set_setting(conn, "manager_username", "manager")
@@ -221,6 +328,8 @@ def index():
                 "publicMode": False,
                 "defaultRotationStart": DEFAULT_ROTATION_START.isoformat(),
                 "defaultRotationEnd": DEFAULT_ROTATION_END.isoformat(),
+                "defaultWindowStart": DEFAULT_VIEW_START.isoformat(),
+                "windowDays": WINDOW_DAYS,
                 "role": session.get("role"),
             },
         )
@@ -241,6 +350,8 @@ def schedule_view():
             "publicMode": False,
             "defaultRotationStart": DEFAULT_ROTATION_START.isoformat(),
             "defaultRotationEnd": DEFAULT_ROTATION_END.isoformat(),
+            "defaultWindowStart": DEFAULT_VIEW_START.isoformat(),
+            "windowDays": WINDOW_DAYS,
             "role": session.get("role"),
         },
     )
@@ -262,6 +373,8 @@ def public_view(token: str):
             "publicMode": True,
             "defaultRotationStart": DEFAULT_ROTATION_START.isoformat(),
             "defaultRotationEnd": DEFAULT_ROTATION_END.isoformat(),
+            "defaultWindowStart": DEFAULT_VIEW_START.isoformat(),
+            "windowDays": WINDOW_DAYS,
             "role": "public",
         },
     )
@@ -309,15 +422,23 @@ def get_schedule():
     if location not in LOCATIONS:
         return jsonify({"error": "Invalid location"}), 400
 
+    start_raw = request.args.get("start_date") or DEFAULT_VIEW_START.isoformat()
     try:
-        year, month = parse_year_month(request.args.get("year"), request.args.get("month"))
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
+        start_date = date.fromisoformat(start_raw)
+    except ValueError:
+        return jsonify({"error": "Invalid start_date"}), 400
 
-    days = empty_month_payload(year, month)
-    learner_types = empty_learner_type_payload(year, month)
-    start_date = date(year, month, 1)
-    end_date = date(year, month, calendar.monthrange(year, month)[1])
+    end_date = start_date + timedelta(days=WINDOW_DAYS - 1)
+    days: dict[str, dict[str, list[str]]] = {}
+    learner_types: dict[str, str] = {}
+    for offset in range(WINDOW_DAYS):
+        cur = start_date + timedelta(days=offset)
+        key = cur.isoformat()
+        days[key] = {
+            shift: ["" for _ in range(slot_limit)]
+            for shift, slot_limit in SHIFT_SLOT_LIMITS.items()
+        }
+        learner_types[key] = "trainee"
 
     with get_db_connection() as conn:
         rows = load_entries_for_range(conn, location, start_date, end_date)
@@ -331,7 +452,7 @@ def get_schedule():
         ).fetchone()
 
     for row in rows:
-        day_key = str(int(row["entry_date"].split("-")[2]))
+        day_key = row["entry_date"]
         shift = row["shift"]
         slot = int(row["slot"])
         if day_key in days and shift in SHIFTS and 1 <= slot <= SHIFT_SLOT_LIMITS[shift]:
@@ -343,8 +464,9 @@ def get_schedule():
     return jsonify(
         {
             "location": location,
-            "year": year,
-            "month": month,
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat(),
+            "window_days": WINDOW_DAYS,
             "days": days,
             "learner_types": learner_types,
             "last_updated": (last_updated_row["last_updated"] if last_updated_row else None),
@@ -360,14 +482,15 @@ def check_updates():
     if location not in LOCATIONS:
         return jsonify({"error": "Invalid location"}), 400
 
+    start_raw = request.args.get("start_date") or DEFAULT_VIEW_START.isoformat()
     try:
-        year, month = parse_year_month(request.args.get("year"), request.args.get("month"))
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
+        start_date_obj = date.fromisoformat(start_raw)
+    except ValueError:
+        return jsonify({"error": "Invalid start_date"}), 400
 
-    start_date = date(year, month, 1).isoformat()
-    end_day = calendar.monthrange(year, month)[1]
-    end_date = date(year, month, end_day).isoformat()
+    end_date_obj = start_date_obj + timedelta(days=WINDOW_DAYS - 1)
+    start_date = start_date_obj.isoformat()
+    end_date = end_date_obj.isoformat()
 
     with get_db_connection() as conn:
         row = conn.execute(
@@ -429,25 +552,17 @@ def update_schedule():
     updated_at = now_iso()
 
     with get_db_connection() as conn:
-        conn.execute(
-            """
-            INSERT INTO schedule_entries (location, entry_date, shift, slot, staff_name, role_type, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(location, entry_date, shift, slot)
-            DO UPDATE SET
-                staff_name = excluded.staff_name,
-                role_type = excluded.role_type,
-                updated_at = excluded.updated_at
-            """,
-            (
-                location,
-                parsed_date.isoformat(),
-                shift,
-                slot_number,
-                staff_name,
-                normalized_role_type,
-                updated_at,
-            ),
+        operation_id = create_operation(conn, session.get("role", "manager"))
+        apply_entry_with_log(
+            conn,
+            operation_id,
+            location,
+            parsed_date.isoformat(),
+            shift,
+            slot_number,
+            staff_name,
+            normalized_role_type,
+            updated_at,
         )
         conn.commit()
 
@@ -477,6 +592,28 @@ def clear_schedule_month():
     end_date = date(year, month, end_day).isoformat()
 
     with get_db_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT entry_date, shift, slot, staff_name, role_type
+            FROM schedule_entries
+            WHERE location = ? AND entry_date BETWEEN ? AND ?
+            """,
+            (location, start_date, end_date),
+        ).fetchall()
+        operation_id = create_operation(conn, session.get("role", "manager"))
+        for row in rows:
+            log_change(
+                conn,
+                operation_id,
+                location,
+                row["entry_date"],
+                row["shift"],
+                int(row["slot"]),
+                row["staff_name"],
+                row["role_type"],
+                None,
+                None,
+            )
         cursor = conn.execute(
             """
             DELETE FROM schedule_entries
@@ -632,7 +769,8 @@ def apply_preset():
 
         rotation_days = int(preset["rotation_days"])
         pattern = json.loads(preset["payload_json"])
-        total_days = apply_preset_pattern(conn, location, pattern, rotation_days, target_start, weeks)
+        operation_id = create_operation(conn, session.get("role", "manager"))
+        total_days = apply_preset_pattern(conn, operation_id, location, pattern, rotation_days, target_start, weeks)
         conn.commit()
 
     return jsonify({"ok": True, "applied_days": total_days, "weeks": weeks})
@@ -674,7 +812,8 @@ def apply_preset_next():
 
         rotation_days = int(preset["rotation_days"])
         pattern = json.loads(preset["payload_json"])
-        total_days = apply_preset_pattern(conn, location, pattern, rotation_days, target_start, weeks)
+        operation_id = create_operation(conn, session.get("role", "manager"))
+        total_days = apply_preset_pattern(conn, operation_id, location, pattern, rotation_days, target_start, weeks)
         conn.commit()
 
     return jsonify(
@@ -687,27 +826,93 @@ def apply_preset_next():
     )
 
 
+@app.post("/api/schedule/undo-last")
+def undo_last_change():
+    if not is_manager_logged_in():
+        return jsonify({"error": "Manager login required"}), 401
+
+    with get_db_connection() as conn:
+        op = conn.execute("SELECT id FROM change_operations ORDER BY id DESC LIMIT 1").fetchone()
+        if not op:
+            return jsonify({"error": "Nothing to undo"}), 400
+
+        op_id = int(op["id"])
+        changes = conn.execute(
+            """
+            SELECT location, entry_date, shift, slot, prev_staff_name, prev_role_type
+            FROM change_entries
+            WHERE operation_id = ?
+            ORDER BY id DESC
+            """,
+            (op_id,),
+        ).fetchall()
+
+        updated_at = now_iso()
+        for row in changes:
+            location = row["location"]
+            entry_date = row["entry_date"]
+            shift = row["shift"]
+            slot = int(row["slot"])
+            prev_staff = row["prev_staff_name"]
+            prev_role = row["prev_role_type"] or ""
+
+            if prev_staff is None:
+                conn.execute(
+                    """
+                    DELETE FROM schedule_entries
+                    WHERE location = ? AND entry_date = ? AND shift = ? AND slot = ?
+                    """,
+                    (location, entry_date, shift, slot),
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO schedule_entries (location, entry_date, shift, slot, staff_name, role_type, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(location, entry_date, shift, slot) DO UPDATE SET
+                        staff_name = excluded.staff_name,
+                        role_type = excluded.role_type,
+                        updated_at = excluded.updated_at
+                    """,
+                    (location, entry_date, shift, slot, prev_staff, prev_role, updated_at),
+                )
+
+        conn.execute("DELETE FROM change_entries WHERE operation_id = ?", (op_id,))
+        conn.execute("DELETE FROM change_operations WHERE id = ?", (op_id,))
+        conn.commit()
+
+    return jsonify({"ok": True, "undone_operation_id": op_id, "changed_rows": len(changes)})
+
+
 @app.get("/api/schedule/export")
-def export_schedule_month():
+def export_schedule_window():
     location = request.args.get("location", LOCATIONS[0])
     if location not in LOCATIONS:
         return jsonify({"error": "Invalid location"}), 400
 
+    start_raw = request.args.get("start_date") or DEFAULT_VIEW_START.isoformat()
     try:
-        year, month = parse_year_month(request.args.get("year"), request.args.get("month"))
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
+        start_date = date.fromisoformat(start_raw)
+    except ValueError:
+        return jsonify({"error": "Invalid start_date"}), 400
+    end_date = start_date + timedelta(days=WINDOW_DAYS - 1)
 
-    days = empty_month_payload(year, month)
-    learner_types = empty_learner_type_payload(year, month)
-    start_date = date(year, month, 1)
-    end_date = date(year, month, calendar.monthrange(year, month)[1])
+    days: dict[str, dict[str, list[str]]] = {}
+    learner_types: dict[str, str] = {}
+    for offset in range(WINDOW_DAYS):
+        cur = start_date + timedelta(days=offset)
+        key = cur.isoformat()
+        days[key] = {
+            shift: ["" for _ in range(slot_limit)]
+            for shift, slot_limit in SHIFT_SLOT_LIMITS.items()
+        }
+        learner_types[key] = "trainee"
 
     with get_db_connection() as conn:
         rows = load_entries_for_range(conn, location, start_date, end_date)
 
     for row in rows:
-        day_key = str(int(row["entry_date"].split("-")[2]))
+        day_key = row["entry_date"]
         shift = row["shift"]
         slot = int(row["slot"])
         if day_key in days and shift in SHIFTS and 1 <= slot <= SHIFT_SLOT_LIMITS[shift]:
@@ -716,16 +921,16 @@ def export_schedule_month():
                 learner_types[day_key] = "student" if (row["role_type"] or "").lower() == "student" else "trainee"
 
     lines = ["Date\tLocation\tShift\tSlot\tName"]
-    for day in range(1, end_date.day + 1):
-        iso = date(year, month, day).isoformat()
-        day_data = days[str(day)]
+    for offset in range(WINDOW_DAYS):
+        iso = (start_date + timedelta(days=offset)).isoformat()
+        day_data = days[iso]
         for shift in ("day", "night"):
             for idx, name in enumerate(day_data[shift], start=1):
                 if name.strip():
                     lines.append(f"{iso}\t{location}\t{shift}\t{idx}\t{name.strip()}")
         trainee_name = (day_data["trainee"][0] or "").strip()
         if trainee_name:
-            role_label = learner_types[str(day)]
+            role_label = learner_types[iso]
             lines.append(f"{iso}\t{location}\t{role_label}\t1\t{trainee_name}")
 
     return jsonify({"text": "\n".join(lines)})

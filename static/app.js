@@ -1,7 +1,8 @@
 ﻿const state = {
   locations: window.APP_CONFIG.locations,
   location: window.APP_CONFIG.locations[0],
-  currentDate: new Date(),
+  windowStart: new Date(window.APP_CONFIG.defaultWindowStart || "2026-05-10"),
+  windowDays: Number(window.APP_CONFIG.windowDays || 56),
   manager: window.APP_CONFIG.role === "manager",
   role: window.APP_CONFIG.role || "employee",
   forceReadOnly: !!window.APP_CONFIG.readOnly,
@@ -21,9 +22,9 @@ const SHIFT_CONFIG = [
 
 const els = {
   tabs: document.getElementById("locationTabs"),
-  monthLabel: document.getElementById("monthLabel"),
-  prevMonth: document.getElementById("prevMonth"),
-  nextMonth: document.getElementById("nextMonth"),
+  windowLabel: document.getElementById("windowLabel"),
+  prevWindow: document.getElementById("prevWindow"),
+  nextWindow: document.getElementById("nextWindow"),
   weekdayHeader: document.getElementById("weekdayHeader"),
   calendarBody: document.getElementById("calendarBody"),
   logoutButton: document.getElementById("logoutButton"),
@@ -41,14 +42,11 @@ const els = {
   savePresetButton: document.getElementById("savePresetButton"),
   applyPresetButton: document.getElementById("applyPresetButton"),
   applyNext8Button: document.getElementById("applyNext8Button"),
+  undoButton: document.getElementById("undoButton"),
   clearMonthButton: document.getElementById("clearMonthButton"),
   copyMonthButton: document.getElementById("copyMonthButton"),
   presetSelect: document.getElementById("presetSelect"),
 };
-
-function monthYear() {
-  return { year: state.currentDate.getFullYear(), month: state.currentDate.getMonth() + 1 };
-}
 
 function canEdit() {
   return state.manager && !state.forceReadOnly;
@@ -59,8 +57,15 @@ function setStatus(message, isError = false) {
   els.saveStatus.classList.toggle("error", isError);
 }
 
-function toIsoDate(year, month, day) {
-  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+function toIsoDateValue(inputDate) {
+  const year = inputDate.getFullYear();
+  const month = String(inputDate.getMonth() + 1).padStart(2, "0");
+  const day = String(inputDate.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function currentWindowStartIso() {
+  return toIsoDateValue(state.windowStart);
 }
 
 function updateSessionUI() {
@@ -74,6 +79,7 @@ function updateSessionUI() {
   els.savePresetButton.classList.toggle("hidden", !managerMode);
   els.applyPresetButton.classList.toggle("hidden", !managerMode);
   els.applyNext8Button.classList.toggle("hidden", !managerMode);
+  els.undoButton.classList.toggle("hidden", !managerMode);
   els.clearMonthButton.classList.toggle("hidden", !managerMode);
   els.copyMonthButton.classList.toggle("hidden", !managerMode);
   els.presetSelect.classList.toggle("hidden", !managerMode);
@@ -105,8 +111,11 @@ function renderWeekdayHeader() {
   });
 }
 
-function renderMonthLabel() {
-  els.monthLabel.textContent = new Intl.DateTimeFormat(undefined, { month: "long", year: "numeric" }).format(state.currentDate);
+function renderWindowLabel() {
+  const end = new Date(state.windowStart);
+  end.setDate(end.getDate() + state.windowDays - 1);
+  const fmt = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric" });
+  els.windowLabel.textContent = `${fmt.format(state.windowStart)} - ${fmt.format(end)}`;
 }
 
 function renderPresetSelect() {
@@ -134,9 +143,8 @@ async function loadPresets() {
   renderPresetSelect();
 }
 
-async function saveShiftLine(day, shift, slot, value, roleType = "") {
-  const { year, month } = monthYear();
-  const payload = { location: state.location, date: toIsoDate(year, month, day), shift, slot, staff_name: value.trim() };
+async function saveShiftLine(entryDateIso, shift, slot, value, roleType = "") {
+  const payload = { location: state.location, date: entryDateIso, shift, slot, staff_name: value.trim() };
   if (shift === "trainee") payload.role_type = roleType === "student" ? "student" : "trainee";
 
   setStatus("Saving...");
@@ -151,7 +159,7 @@ async function saveShiftLine(day, shift, slot, value, roleType = "") {
   setStatus(`Saved ${payload.date}`);
 }
 
-function buildShiftLine(day, shift, slot, label, value, learnerType = "trainee") {
+function buildShiftLine(entryDateIso, shift, slot, label, value, learnerType = "trainee") {
   const trimmedValue = (value || "").trim();
   if (!canEdit() && !trimmedValue) return null;
 
@@ -170,8 +178,8 @@ function buildShiftLine(day, shift, slot, label, value, learnerType = "trainee")
     input.className = "shift-input";
     input.addEventListener("change", async () => {
       try {
-        const activeLearnerType = shift === "trainee" ? (state.learnerTypes[String(day)] || learnerType || "trainee") : "";
-        await saveShiftLine(day, shift, slot, input.value, activeLearnerType);
+        const activeLearnerType = shift === "trainee" ? (state.learnerTypes[entryDateIso] || learnerType || "trainee") : "";
+        await saveShiftLine(entryDateIso, shift, slot, input.value, activeLearnerType);
       } catch (err) {
         setStatus(err.message, true);
       }
@@ -185,8 +193,8 @@ function buildShiftLine(day, shift, slot, label, value, learnerType = "trainee")
       selector.value = learnerType === "student" ? "student" : "trainee";
       selector.addEventListener("change", async () => {
         try {
-          state.learnerTypes[String(day)] = selector.value;
-          await saveShiftLine(day, "trainee", 1, input.value, selector.value);
+          state.learnerTypes[entryDateIso] = selector.value;
+          await saveShiftLine(entryDateIso, "trainee", 1, input.value, selector.value);
           labelEl.textContent = `${selector.value === "student" ? "Student" : "Trainee"} -`;
         } catch (err) {
           setStatus(err.message, true);
@@ -204,7 +212,10 @@ function buildShiftLine(day, shift, slot, label, value, learnerType = "trainee")
   return line;
 }
 
-function buildDayCell(day, dayData, showMonthName) {
+function buildDayCell(entryDateIso, dayData, showMonthName) {
+  const d = new Date(`${entryDateIso}T00:00:00`);
+  const dayNum = d.getDate();
+
   const td = document.createElement("td");
   td.className = "calendar-day";
   const content = document.createElement("div");
@@ -213,13 +224,13 @@ function buildDayCell(day, dayData, showMonthName) {
   top.className = "day-top";
   const number = document.createElement("div");
   number.className = "day-number";
-  number.textContent = String(day);
+  number.textContent = String(dayNum);
   top.appendChild(number);
 
   if (showMonthName) {
     const monthName = document.createElement("div");
     monthName.className = "month-name";
-    monthName.textContent = state.currentDate.toLocaleString(undefined, { month: "long" });
+    monthName.textContent = d.toLocaleString(undefined, { month: "long" });
     top.appendChild(monthName);
   }
 
@@ -230,9 +241,9 @@ function buildDayCell(day, dayData, showMonthName) {
   SHIFT_CONFIG.forEach((cfg) => {
     for (let i = 0; i < cfg.slots; i += 1) {
       const vals = dayData[cfg.key] || [];
-      const learnerType = state.learnerTypes[String(day)] || "trainee";
+      const learnerType = state.learnerTypes[entryDateIso] || "trainee";
       const label = cfg.key === "trainee" ? (learnerType === "student" ? "Student" : "Trainee") : cfg.label;
-      const line = buildShiftLine(day, cfg.key, i + 1, label, vals[i] || "", learnerType);
+      const line = buildShiftLine(entryDateIso, cfg.key, i + 1, label, vals[i] || "", learnerType);
       if (line) list.appendChild(line);
     }
   });
@@ -242,44 +253,40 @@ function buildDayCell(day, dayData, showMonthName) {
   return td;
 }
 
-function buildEmptyCell() {
-  const td = document.createElement("td");
-  td.className = "calendar-day empty";
-  return td;
-}
-
 function renderCalendar(days) {
   els.calendarBody.innerHTML = "";
-  const { year, month } = monthYear();
-  const daysInMonth = Object.keys(days).length;
-  const firstWeekday = new Date(year, month - 1, 1).getDay();
-  let dayPointer = 1;
-  let weekIndex = 0;
-
-  while (dayPointer <= daysInMonth) {
+  const keys = Object.keys(days).sort();
+  for (let rowIndex = 0; rowIndex < 8; rowIndex += 1) {
     const row = document.createElement("tr");
-    for (let weekday = 0; weekday < 7; weekday += 1) {
-      if ((weekIndex === 0 && weekday < firstWeekday) || dayPointer > daysInMonth) {
-        row.appendChild(buildEmptyCell());
+    for (let col = 0; col < 7; col += 1) {
+      const index = rowIndex * 7 + col;
+      const key = keys[index];
+      if (!key) {
+        const empty = document.createElement("td");
+        empty.className = "calendar-day empty";
+        row.appendChild(empty);
       } else {
-        row.appendChild(buildDayCell(dayPointer, days[String(dayPointer)] || {}, dayPointer === 1));
-        dayPointer += 1;
+        const showMonthName = key.endsWith("-01") || index === 0;
+        row.appendChild(buildDayCell(key, days[key] || {}, showMonthName));
       }
     }
     els.calendarBody.appendChild(row);
-    weekIndex += 1;
   }
 }
 
 async function loadSchedule() {
-  const { year, month } = monthYear();
-  const response = await fetch(`/api/schedule?${new URLSearchParams({ location: state.location, year: String(year), month: String(month) }).toString()}`);
+  const params = new URLSearchParams({
+    location: state.location,
+    start_date: currentWindowStartIso(),
+  });
+  const response = await fetch(`/api/schedule?${params.toString()}`);
   const data = await response.json();
   if (!response.ok) throw new Error(data.error || "Failed to load schedule");
+
   state.lastUpdated = data.last_updated;
   state.learnerTypes = data.learner_types || {};
-  renderMonthLabel();
-  renderCalendar(data.days);
+  renderWindowLabel();
+  renderCalendar(data.days || {});
   if (canEdit()) await loadPresets();
 }
 
@@ -363,29 +370,36 @@ async function applyNext8Weeks() {
   await loadSchedule();
 }
 
-async function clearCurrentMonth() {
-  const { year, month } = monthYear();
-  const monthLabel = state.currentDate.toLocaleDateString(undefined, { month: "long", year: "numeric" });
-  if (!window.confirm(`Clear all entries for ${state.location} in ${monthLabel}? This cannot be undone.`)) return;
+async function undoLastChange() {
+  const response = await fetch("/api/schedule/undo-last", { method: "POST" });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || "Failed to undo");
+  setStatus(`Undid last change (${data.changed_rows} rows)`);
+  await loadSchedule();
+}
+
+async function clearCurrentWindow() {
+  const start = currentWindowStartIso();
+  const end = toIsoDateValue(new Date(state.windowStart.getTime() + (state.windowDays - 1) * 86400000));
+  if (!window.confirm(`Clear entries for ${state.location} from ${start} to ${end}?`)) return;
 
   const response = await fetch("/api/schedule/clear-month", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ location: state.location, year, month }),
+    body: JSON.stringify({ location: state.location, year: state.windowStart.getFullYear(), month: state.windowStart.getMonth() + 1 }),
   });
   const data = await response.json();
-  if (!response.ok) throw new Error(data.error || "Failed to clear month");
-  setStatus(`Cleared ${data.deleted_rows} entries for ${monthLabel}`);
+  if (!response.ok) throw new Error(data.error || "Failed to clear window month");
+  setStatus(`Cleared ${data.deleted_rows} entries in current month`);
   await loadSchedule();
 }
 
-async function copyMonthExport() {
-  const { year, month } = monthYear();
-  const response = await fetch(`/api/schedule/export?${new URLSearchParams({ location: state.location, year: String(year), month: String(month) }).toString()}`);
+async function copyWindowExport() {
+  const response = await fetch(`/api/schedule/export?${new URLSearchParams({ location: state.location, start_date: currentWindowStartIso() }).toString()}`);
   const data = await response.json();
-  if (!response.ok) throw new Error(data.error || "Failed to export month");
+  if (!response.ok) throw new Error(data.error || "Failed to export window");
   await navigator.clipboard.writeText(data.text || "");
-  setStatus("Month copied to clipboard");
+  setStatus("8-week schedule copied to clipboard");
 }
 
 async function updateEmployeeCredentials(evt) {
@@ -409,10 +423,8 @@ async function updateEmployeeCredentials(evt) {
 }
 
 async function pollForUpdates() {
-  const { year, month } = monthYear();
-  const params = new URLSearchParams({ location: state.location, year: String(year), month: String(month) });
+  const params = new URLSearchParams({ location: state.location, start_date: currentWindowStartIso() });
   if (state.lastUpdated) params.set("since", state.lastUpdated);
-
   try {
     const response = await fetch(`/api/updates?${params.toString()}`);
     const data = await response.json();
@@ -425,13 +437,13 @@ async function pollForUpdates() {
 }
 
 function bindEvents() {
-  els.prevMonth.addEventListener("click", async () => {
-    state.currentDate = new Date(state.currentDate.getFullYear(), state.currentDate.getMonth() - 1, 1);
+  els.prevWindow.addEventListener("click", async () => {
+    state.windowStart = new Date(state.windowStart.getTime() - state.windowDays * 86400000);
     await loadSchedule();
   });
 
-  els.nextMonth.addEventListener("click", async () => {
-    state.currentDate = new Date(state.currentDate.getFullYear(), state.currentDate.getMonth() + 1, 1);
+  els.nextWindow.addEventListener("click", async () => {
+    state.windowStart = new Date(state.windowStart.getTime() + state.windowDays * 86400000);
     await loadSchedule();
   });
 
@@ -440,6 +452,7 @@ function bindEvents() {
     state.adminPanelOpen = !state.adminPanelOpen;
     updateSessionUI();
   });
+
   if (els.employeeCredsForm) {
     els.employeeCredsForm.addEventListener("submit", async (evt) => {
       try {
@@ -465,11 +478,14 @@ function bindEvents() {
   els.applyNext8Button.addEventListener("click", async () => {
     try { await applyNext8Weeks(); } catch (err) { setStatus(err.message, true); }
   });
+  els.undoButton.addEventListener("click", async () => {
+    try { await undoLastChange(); } catch (err) { setStatus(err.message, true); }
+  });
   els.clearMonthButton.addEventListener("click", async () => {
-    try { await clearCurrentMonth(); } catch (err) { setStatus(err.message, true); }
+    try { await clearCurrentWindow(); } catch (err) { setStatus(err.message, true); }
   });
   els.copyMonthButton.addEventListener("click", async () => {
-    try { await copyMonthExport(); } catch (err) { setStatus(err.message, true); }
+    try { await copyWindowExport(); } catch (err) { setStatus(err.message, true); }
   });
 }
 
