@@ -17,7 +17,6 @@ const state = {
   publicMode: !!window.APP_CONFIG.publicMode,
   lastUpdated: null,
   learnerTypes: {},
-  highlights: {},
   presets: [],
   adminPanelOpen: false,
 };
@@ -155,14 +154,12 @@ async function loadPresets() {
 }
 
 async function saveShiftLine(entryDateIso, shift, slot, value, roleType = "") {
-  const slotHighlights = ((state.highlights[entryDateIso] || {})[shift] || []);
   const payload = {
     location: state.location,
     date: entryDateIso,
     shift,
     slot,
     staff_name: value.trim(),
-    highlight_color: slotHighlights[slot - 1] || "",
   };
   if (shift === "trainee") payload.role_type = roleType === "student" ? "student" : "trainee";
 
@@ -184,10 +181,18 @@ function buildShiftLine(entryDateIso, shift, slot, label, value, learnerType = "
 
   const line = document.createElement("div");
   line.className = "shift-line";
-  const currentHighlight = ((((state.highlights[entryDateIso] || {})[shift] || [])[slot - 1]) || "");
-  if (currentHighlight) {
-    line.classList.add(`highlight-${currentHighlight}`);
-  }
+  const applyLineHighlight = (nameValue) => {
+    const text = String(nameValue || "").trim();
+    line.classList.remove("highlight-green", "highlight-purple");
+    if (/\(\)\s*$/.test(text)) {
+      line.classList.add("highlight-green");
+      return;
+    }
+    if (/\^\s*$/.test(text)) {
+      line.classList.add("highlight-purple");
+    }
+  };
+  applyLineHighlight(trimmedValue);
 
   const labelEl = document.createElement("span");
   labelEl.className = "shift-label";
@@ -202,35 +207,13 @@ function buildShiftLine(entryDateIso, shift, slot, label, value, learnerType = "
     input.addEventListener("change", async () => {
       try {
         const activeLearnerType = shift === "trainee" ? (state.learnerTypes[entryDateIso] || learnerType || "trainee") : "";
+        applyLineHighlight(input.value);
         await saveShiftLine(entryDateIso, shift, slot, input.value, activeLearnerType);
       } catch (err) {
         setStatus(err.message, true);
       }
     });
     line.appendChild(input);
-
-    const colorToggle = document.createElement("button");
-    colorToggle.type = "button";
-    colorToggle.className = "highlight-toggle";
-    colorToggle.title = "Toggle highlight";
-    colorToggle.textContent = currentHighlight === "green" ? "G" : currentHighlight === "purple" ? "P" : "H";
-    colorToggle.addEventListener("click", async () => {
-      try {
-        const seq = ["", "green", "purple"];
-        const current = ((((state.highlights[entryDateIso] || {})[shift] || [])[slot - 1]) || "");
-        const next = seq[(seq.indexOf(current) + 1) % seq.length];
-        state.highlights[entryDateIso] = state.highlights[entryDateIso] || {};
-        state.highlights[entryDateIso][shift] = state.highlights[entryDateIso][shift] || [];
-        state.highlights[entryDateIso][shift][slot - 1] = next;
-        await saveShiftLine(entryDateIso, shift, slot, input.value, shift === "trainee" ? (state.learnerTypes[entryDateIso] || learnerType || "trainee") : "");
-        line.classList.remove("highlight-green", "highlight-purple");
-        if (next) line.classList.add(`highlight-${next}`);
-        colorToggle.textContent = next === "green" ? "G" : next === "purple" ? "P" : "H";
-      } catch (err) {
-        setStatus(err.message, true);
-      }
-    });
-    line.appendChild(colorToggle);
 
     if (shift === "trainee") {
       const selector = document.createElement("select");
@@ -331,7 +314,6 @@ async function loadSchedule() {
 
   state.lastUpdated = data.last_updated;
   state.learnerTypes = data.learner_types || {};
-  state.highlights = data.highlights || {};
   renderWindowLabel();
   renderCalendar(data.days || {});
   if (canEdit()) await loadPresets();

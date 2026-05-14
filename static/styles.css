@@ -311,14 +311,6 @@ button {
   color: #27364e;
 }
 
-.highlight-toggle {
-  margin-left: 0.25rem;
-  min-width: 26px;
-  padding: 0.12rem 0.2rem;
-  font-size: 0.75rem;
-  font-weight: 700;
-}
-
 .learner-type-select {
   margin-left: 0.35rem;
   border: 1px solid #8f9bb0;
