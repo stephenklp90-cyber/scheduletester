@@ -962,6 +962,71 @@ def undo_last_change():
     return jsonify({"ok": True, "undone_operation_id": op_id, "changed_rows": len(changes)})
 
 
+@app.post("/api/schedule/find-replace")
+def find_replace_schedule_name():
+    if not is_manager_logged_in():
+        return jsonify({"error": "Manager login required"}), 401
+
+    data = request.get_json(silent=True) or {}
+    location = data.get("location")
+    find_name = str(data.get("find_name", "")).strip()
+    replace_name = str(data.get("replace_name", "")).strip()
+    from_date_raw = str(data.get("from_date", "")).strip()
+
+    if location not in LOCATIONS:
+        return jsonify({"error": "Invalid location"}), 400
+    if not find_name:
+        return jsonify({"error": "Find name is required"}), 400
+    if not replace_name:
+        return jsonify({"error": "Replace name is required"}), 400
+    if len(replace_name) > 80:
+        return jsonify({"error": "Replacement name too long"}), 400
+    if find_name == replace_name:
+        return jsonify({"error": "Find and replace names are the same"}), 400
+
+    try:
+        from_date_obj = date.fromisoformat(from_date_raw)
+    except ValueError:
+        return jsonify({"error": "Invalid from_date"}), 400
+
+    changed = 0
+    with get_db_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT entry_date, shift, slot, staff_name, role_type, highlight_color
+            FROM schedule_entries
+            WHERE location = ? AND entry_date >= ? AND staff_name = ?
+            ORDER BY entry_date, shift, slot
+            """,
+            (location, from_date_obj.isoformat(), find_name),
+        ).fetchall()
+
+        if not rows:
+            return jsonify({"ok": True, "changed_rows": 0})
+
+        operation_id = create_operation(conn, session.get("role", "manager"))
+        updated_at = now_iso()
+
+        for row in rows:
+            apply_entry_with_log(
+                conn,
+                operation_id,
+                location,
+                row["entry_date"],
+                row["shift"],
+                int(row["slot"]),
+                replace_name,
+                row["role_type"] or "",
+                (row["highlight_color"] or "").strip().lower(),
+                updated_at,
+            )
+            changed += 1
+
+        conn.commit()
+
+    return jsonify({"ok": True, "changed_rows": changed})
+
+
 @app.get("/api/schedule/export")
 def export_schedule_window():
     location = request.args.get("location", LOCATIONS[0])

@@ -51,6 +51,7 @@ const els = {
   savePresetButton: document.getElementById("savePresetButton"),
   applyPresetButton: document.getElementById("applyPresetButton"),
   applyNext8Button: document.getElementById("applyNext8Button"),
+  findReplaceButton: document.getElementById("findReplaceButton"),
   undoButton: document.getElementById("undoButton"),
   clearMonthButton: document.getElementById("clearMonthButton"),
   copyMonthButton: document.getElementById("copyMonthButton"),
@@ -88,6 +89,7 @@ function updateSessionUI() {
   els.savePresetButton.classList.toggle("hidden", !managerMode);
   els.applyPresetButton.classList.toggle("hidden", !managerMode);
   els.applyNext8Button.classList.toggle("hidden", !managerMode);
+  els.findReplaceButton.classList.toggle("hidden", !managerMode);
   els.undoButton.classList.toggle("hidden", !managerMode);
   els.clearMonthButton.classList.toggle("hidden", !managerMode);
   els.copyMonthButton.classList.toggle("hidden", !managerMode);
@@ -425,6 +427,30 @@ async function undoLastChange() {
   await loadSchedule();
 }
 
+async function findReplaceFromDate() {
+  const findName = window.prompt("Find exact name:");
+  if (!findName) return;
+  const replaceName = window.prompt("Replace with:");
+  if (!replaceName) return;
+  const fromDate = window.prompt("Replace from date onward (YYYY-MM-DD):", currentWindowStartIso());
+  if (!fromDate) return;
+
+  const response = await fetch("/api/schedule/find-replace", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      location: state.location,
+      find_name: findName.trim(),
+      replace_name: replaceName.trim(),
+      from_date: fromDate.trim(),
+    }),
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || "Find and replace failed");
+  setStatus(`Find & replace updated ${data.changed_rows} slots`);
+  await loadSchedule();
+}
+
 async function clearCurrentWindow() {
   const start = currentWindowStartIso();
   const end = toIsoDateValue(new Date(state.windowStart.getTime() + (state.windowDays - 1) * 86400000));
@@ -524,6 +550,9 @@ function bindEvents() {
   });
   els.applyNext8Button.addEventListener("click", async () => {
     try { await applyNext8Weeks(); } catch (err) { setStatus(err.message, true); }
+  });
+  els.findReplaceButton.addEventListener("click", async () => {
+    try { await findReplaceFromDate(); } catch (err) { setStatus(err.message, true); }
   });
   els.undoButton.addEventListener("click", async () => {
     try { await undoLastChange(); } catch (err) { setStatus(err.message, true); }
