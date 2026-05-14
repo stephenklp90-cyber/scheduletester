@@ -183,7 +183,11 @@ function buildShiftLine(entryDateIso, shift, slot, label, value, learnerType = "
   line.className = "shift-line";
   const applyLineHighlight = (nameValue) => {
     const text = String(nameValue || "").trim();
-    line.classList.remove("highlight-green", "highlight-purple");
+    line.classList.remove("highlight-green", "highlight-purple", "highlight-red");
+    if (/\(\?\)\s*$/.test(text)) {
+      line.classList.add("highlight-red");
+      return;
+    }
     if (/\(\)\s*$/.test(text)) {
       line.classList.add("highlight-green");
       return;

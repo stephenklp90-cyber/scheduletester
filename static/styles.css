@@ -276,6 +276,10 @@ button {
   background: #ede3fa;
 }
 
+.shift-line.highlight-red {
+  background: #f9dede;
+}
+
 .shift-label {
   font-weight: 700;
   margin-right: 0.25rem;
